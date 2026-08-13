@@ -1,0 +1,27 @@
+BasedOnStyle: Google
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 158
+PointerAlignment: Left
+DerivePointerAlignment: false
+MaxEmptyLinesToKeep: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
+AccessModifierOffset: -4
+NamespaceIndentation: All
+BreakBeforeBraces: Allman
+
+# 开启连续列对齐（声明/赋值），让接口声明更整齐
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignConsecutiveMacros: true
+AlignAfterOpenBracket: Align
+AlignOperands: true
+AlignTrailingComments: true
+
+# 参数或实参换行后采用一行一个，避免同一行塞多个
+BinPackParameters: false
+BinPackArguments: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# 函数不要压缩成单行，保持换行可读性
+AllowShortFunctionsOnASingleLine: None

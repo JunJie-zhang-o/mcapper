@@ -1,0 +1,53 @@
+
+
+☐ 整个工程可以以动态库的形式嵌入式开发，也可以通过cli等方式外挂式使用
+
+
+
+
+通过配置进行定义:
+    ☐ 队列长度
+    ☐ 记录类型 ROS1 ROS2 Struct
+    ☐ 触发信息 触发前和触发后
+
+
+
+Ros1Capper:
+    #include <ros/message_event.h>
+    #include <ros/serialization.h>
+    #include <topic_tools/shape_shifter.h>
+
+    const std::string topic = event.getPublisherName(); // 注意：这不是 topic name
+    const std::string datatype = msg->getDataType();    // e.g. sensor_msgs/Image
+    const std::string md5sum = msg->getMD5Sum();
+    const std::string msg_def = msg->getMessageDefinition();
+
+    const uint32_t size = ros::serialization::serializationLength(*msg);
+    std::vector<uint8_t> bytes(size);
+    ros::serialization::OStream stream(bytes.data(), size);
+    ros::serialization::serialize(stream, *msg);
+
+
+
+msgpack:
+    mcap::Schema schema;
+    schema.name = "zj_humanoid/ArmTelemetry";
+    schema.encoding = "";
+    schema.data.clear();
+    writer.addSchema(schema);
+
+    mcap::Channel channel;
+    channel.topic = options_.topic;
+    channel.messageEncoding = "msgpack";
+    channel.schemaId = schema.id;
+    writer.addChannel(channel);
+    mcap::Message message;
+    message.channelId = channel.id;
+    message.sequence = sequence++;
+    message.logTime = timestamp_ns;
+    message.publishTime = timestamp_ns;
+    message.data =
+        reinterpret_cast<const std::byte*>(payload.data());
+    message.dataSize = payload.size();
+
+    const auto status = writer.write(message);
