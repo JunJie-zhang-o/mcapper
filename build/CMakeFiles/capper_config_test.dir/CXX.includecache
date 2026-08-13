@@ -1,0 +1,40 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/mcapper/capper_config.hpp
+mcapper/logger_options.hpp
+-
+string
+-
+vector
+-
+
+../include/mcapper/logger_options.hpp
+cstddef
+-
+cstdint
+-
+string
+-
+vector
+-
+
+/home/ros/00-RosSpace/24-mcapper/test/capper_config_test.cpp
+cassert
+-
+fstream
+-
+mcapper/capper_config.hpp
+-
+stdexcept
+-
+string
+-
+vector
+-
+

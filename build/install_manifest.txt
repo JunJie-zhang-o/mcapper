@@ -1,0 +1,14 @@
+/tmp/mcapper-install/lib/libmcapper.so.0.1.0
+/tmp/mcapper-install/lib/libmcapper.so.0
+/tmp/mcapper-install/lib/libmcapper.so
+/tmp/mcapper-install/include/mcapper/logger_options.hpp
+/tmp/mcapper-install/include/mcapper/version.hpp
+/tmp/mcapper-install/include/mcapper/record.hpp
+/tmp/mcapper-install/include/mcapper/trigger.hpp
+/tmp/mcapper-install/include/mcapper/ring_buffer.hpp
+/tmp/mcapper-install/include/mcapper/flight_logger.hpp
+/tmp/mcapper-install/share/mcapper/package.xml
+/tmp/mcapper-install/lib/cmake/mcapper/mcapperTargets.cmake
+/tmp/mcapper-install/lib/cmake/mcapper/mcapperTargets-noconfig.cmake
+/tmp/mcapper-install/lib/cmake/mcapper/mcapperConfig.cmake
+/tmp/mcapper-install/lib/cmake/mcapper/mcapperConfigVersion.cmake

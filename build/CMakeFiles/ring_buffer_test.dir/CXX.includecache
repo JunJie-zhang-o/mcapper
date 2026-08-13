@@ -1,0 +1,28 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/mcapper/ring_buffer.hpp
+atomic
+-
+cstddef
+-
+stdexcept
+-
+utility
+-
+vector
+-
+
+/home/ros/00-RosSpace/24-mcapper/test/ring_buffer_test.cpp
+cassert
+-
+vector
+-
+mcapper/ring_buffer.hpp
+-
+

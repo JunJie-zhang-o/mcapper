@@ -1,0 +1,67 @@
+[
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/msgpack_mcap_cli.dir/main.cpp.o -c /home/ros/00-RosSpace/24-mcapper/tests/msgpack/main.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/main.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/ring_buffer_test.dir/test/ring_buffer_test.cpp.o -c /home/ros/00-RosSpace/24-mcapper/test/ring_buffer_test.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/test/ring_buffer_test.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/trigger_window_test.dir/test/trigger_window_test.cpp.o -c /home/ros/00-RosSpace/24-mcapper/test/trigger_window_test.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/test/trigger_window_test.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/simple_flight_logger.dir/examples/simple_flight_logger.cpp.o -c /home/ros/00-RosSpace/24-mcapper/examples/simple_flight_logger.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/examples/simple_flight_logger.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/mcap_writer_test.dir/test/mcap_writer_test.cpp.o -c /home/ros/00-RosSpace/24-mcapper/test/mcap_writer_test.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/test/mcap_writer_test.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/capper_config_test.dir/test/capper_config_test.cpp.o -c /home/ros/00-RosSpace/24-mcapper/test/capper_config_test.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/test/capper_config_test.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/capper_config.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/capper_config.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/capper_config.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/flight_logger.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/flight_logger.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/flight_logger.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/mcap_writer.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/mcap_writer.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/mcap_writer.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/record_capper.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/record_capper.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/record_capper.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/trigger.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/trigger.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/trigger.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++  -Dmcapper_EXPORTS -I/home/ros/00-RosSpace/24-mcapper/include -I/home/ros/00-RosSpace/24-mcapper/src  -fPIC   -std=gnu++17 -o CMakeFiles/mcapper.dir/src/version.cpp.o -c /home/ros/00-RosSpace/24-mcapper/src/version.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/src/version.cpp"
+},
+{
+  "directory": "/home/ros/00-RosSpace/24-mcapper/tests/msgpack/build/mcapper_build",
+  "command": "/usr/bin/c++   -I/home/ros/00-RosSpace/24-mcapper/include    -std=gnu++17 -o CMakeFiles/record_capper_test.dir/test/record_capper_test.cpp.o -c /home/ros/00-RosSpace/24-mcapper/test/record_capper_test.cpp",
+  "file": "/home/ros/00-RosSpace/24-mcapper/test/record_capper_test.cpp"
+}
+]

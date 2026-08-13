@@ -1,0 +1,11 @@
+logger:
+  output_directory: logs
+  base_filename: ros1_capture
+  ring_buffer_capacity: 10000
+  pre_trigger_duration_ns: 5000000000
+  post_trigger_duration_ns: 0
+source:
+  type: ros1
+  topics:
+    - /camera/image_raw
+    - /imu/data

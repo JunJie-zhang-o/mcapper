@@ -1,0 +1,78 @@
+Start testing: Aug 14 01:27 CST
+----------------------------------------------------------
+1/5 Testing: ring_buffer_test
+1/5 Test: ring_buffer_test
+Command: "/home/ros/00-RosSpace/24-mcapper/build/ring_buffer_test"
+Directory: /home/ros/00-RosSpace/24-mcapper/build
+"ring_buffer_test" start time: Aug 14 01:27 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"ring_buffer_test" end time: Aug 14 01:27 CST
+"ring_buffer_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/5 Testing: trigger_window_test
+2/5 Test: trigger_window_test
+Command: "/home/ros/00-RosSpace/24-mcapper/build/trigger_window_test"
+Directory: /home/ros/00-RosSpace/24-mcapper/build
+"trigger_window_test" start time: Aug 14 01:27 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"trigger_window_test" end time: Aug 14 01:27 CST
+"trigger_window_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/5 Testing: mcap_writer_test
+3/5 Test: mcap_writer_test
+Command: "/home/ros/00-RosSpace/24-mcapper/build/mcap_writer_test"
+Directory: /home/ros/00-RosSpace/24-mcapper/build
+"mcap_writer_test" start time: Aug 14 01:27 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"mcap_writer_test" end time: Aug 14 01:27 CST
+"mcap_writer_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/5 Testing: capper_config_test
+4/5 Test: capper_config_test
+Command: "/home/ros/00-RosSpace/24-mcapper/build/capper_config_test"
+Directory: /home/ros/00-RosSpace/24-mcapper/build
+"capper_config_test" start time: Aug 14 01:27 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"capper_config_test" end time: Aug 14 01:27 CST
+"capper_config_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/5 Testing: record_capper_test
+5/5 Test: record_capper_test
+Command: "/home/ros/00-RosSpace/24-mcapper/build/record_capper_test"
+Directory: /home/ros/00-RosSpace/24-mcapper/build
+"record_capper_test" start time: Aug 14 01:27 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"record_capper_test" end time: Aug 14 01:27 CST
+"record_capper_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Aug 14 01:27 CST

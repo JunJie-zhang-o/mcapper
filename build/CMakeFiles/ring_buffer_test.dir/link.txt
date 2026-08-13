@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/ring_buffer_test.dir/test/ring_buffer_test.cpp.o  -o ring_buffer_test  -Wl,-rpath,/home/ros/00-RosSpace/24-mcapper/build libmcapper.so.0.1.0 
