@@ -1,301 +1,215 @@
-#progma once
+#pragma once
 
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <stdexcept>
+#include <utility>
 
 namespace flightLogger
 {
-    
 
-template<typename T>
-struct TimedRecord
-{
-    uint64_t timestamp_ns;
-    T data;
-};
-
-
-
-
-
-// 覆盖型环形队列
-// template<typename T, std::size_t N>
-// class OverwriteRingBuffer
-// {
-// public:
-//     void push(const T& value)
-//     {
-//         data_[write_] = value;
-
-//         ++write_;
-//         if (write_ == N)
-//             write_ = 0;
-
-//         if (size_ < N)
-//             ++size_;
-//     }
-
-// private:
-//     std::array<T, N> data_;
-//     std::size_t write_{0};
-//     std::size_t size_{0};
-// };
-
-
-#include <array>
-#include <cstddef>
-#include <span>
-#include <utility>
-
-template<typename T, std::size_t N>
-class OverwriteRingBuffer
-{
-    static_assert(N > 0);
-
-public:
-    struct Segments
+    template <typename T>
+    struct TimedRecord
     {
-        std::span<const T> first;
-        std::span<const T> second;
+        /// @brief Record timestamp in nanoseconds.
+        uint64_t timestamp_ns;
+        /// @brief Payload captured at the timestamp.
+        T data;
     };
 
-    void push(const T& value)
+    template <typename T, std::size_t N>
+    class OverwriteRingBuffer
     {
-        data_[write_] = value;
-        advance();
-    }
-
-    void push(T&& value)
-    {
-        data_[write_] = std::move(value);
-        advance();
-    }
-
-    void clear() noexcept
-    {
-        write_ = 0;
-        size_ = 0;
-    }
-
-    [[nodiscard]]
-    std::size_t size() const noexcept
-    {
-        return size_;
-    }
-
-    [[nodiscard]]
-    static constexpr std::size_t capacity() noexcept
-    {
-        return N;
-    }
-
-    [[nodiscard]]
-    bool empty() const noexcept
-    {
-        return size_ == 0;
-    }
-
-    [[nodiscard]]
-    bool full() const noexcept
-    {
-        return size_ == N;
-    }
-
-    // 返回按时间顺序排列的两个连续内存区间
-    //
-    // first + second = oldest -> newest
-    [[nodiscard]]
-    Segments chronological_segments() const noexcept
-    {
-        if (size_ == 0)
-            return {};
-
-        // 还没有发生覆盖
-        if (size_ < N)
+    public:
+        /// @brief Construct a ring buffer with compile-time capacity.
+        OverwriteRingBuffer()
         {
-            return {
-                std::span<const T>{data_.data(), size_},
-                {}
-            };
+            if (N == 0) [[unlikely]]
+                throw std::invalid_argument("ring buffer capacity must be greater than zero");
         }
 
-        // 已经发生覆盖：
-        //
-        // physical:
-        //
-        // [new][new][old][old][old]
-        //           ^
-        //         write_
-        //
-        // logical:
-        //
-        // [old][old][old] + [new][new]
-        return {
-            std::span<const T>{
-                data_.data() + write_,
-                N - write_
-            },
-
-            std::span<const T>{
-                data_.data(),
-                write_
-            }
+        struct Segments
+        {
+            /// @brief First contiguous chronological segment.
+            std::span<const T> first;
+            /// @brief Second wrapped chronological segment.
+            std::span<const T> second;
         };
-    }
 
-private:
-    void advance() noexcept
-    {
-        ++write_;
-
-        if (write_ == N)
-            write_ = 0;
-
-        if (size_ < N)
-            ++size_;
-    }
-
-private:
-    std::array<T, N> data_{};
-
-    // 下一次写入的位置
-    std::size_t write_{0};
-
-    // 当前有效元素数
-    std::size_t size_{0};
-};
-
-
-
-#include <atomic>
-#include <cstddef>
-
-template<typename T, std::size_t N>
-class DoubleRingBuffer
-{
-public:
-    using Ring = OverwriteRingBuffer<T, N>;
-
-    void push(const T& value)
-    {
-        service_freeze_request();
-
-        buffers_[active_].push(value);
-    }
-
-    void push(T&& value)
-    {
-        service_freeze_request();
-
-        buffers_[active_].push(std::move(value));
-    }
-
-    // 可以由任意线程调用
-    //
-    // 注意这里只是请求 freeze，
-    // 真正切换由 producer 自己执行。
-    void request_freeze() noexcept
-    {
-        freeze_requested_.store(
-            true,
-            std::memory_order_release);
-    }
-
-    // MCAP线程调用
-    //
-    // 成功后：
-    //
-    // index = frozen buffer index
-    // ring  = frozen ring
-    //
-    // 在 release_frozen() 前 producer 不会复用它。
-    bool try_acquire_frozen(
-        std::size_t& index,
-        const Ring*& ring) noexcept
-    {
-        int expected =
-            frozen_state_.load(
-                std::memory_order_acquire);
-
-        if (expected < 0)
-            return false;
-
-        if (!frozen_state_.compare_exchange_strong(
-                expected,
-                kDumping,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
+        /// @brief Append a copy of a value, overwriting the oldest entry when full.
+        /// @param value Value to append.
+        void push(const T& value)
         {
-            return false;
+            this->data_[this->write_] = value;
+            this->advance();
         }
 
-        index = static_cast<std::size_t>(expected);
-        ring = &buffers_[index];
-
-        return true;
-    }
-
-    // MCAP写完以后释放 Frozen Buffer
-    void release_frozen(std::size_t index)
-    {
-        buffers_[index].clear();
-
-        frozen_state_.store(
-            kNoFrozen,
-            std::memory_order_release);
-    }
-
-private:
-    void service_freeze_request()
-    {
-        // producer 自己处理切换
-        if (!freeze_requested_.exchange(
-                false,
-                std::memory_order_acq_rel))
+        /// @brief Append a moved value, overwriting the oldest entry when full.
+        /// @param value Value to append.
+        void push(T&& value)
         {
-            return;
+            this->data_[this->write_] = std::move(value);
+            this->advance();
         }
 
-        // 上一个 frozen buffer 还没有落盘完成
-        if (frozen_state_.load(
-                std::memory_order_acquire) != kNoFrozen)
+        /// @brief Remove all stored elements and reset write position.
+        void clear() noexcept
         {
-            // 保留请求，下次 push 再尝试
-            freeze_requested_.store(
-                true,
-                std::memory_order_release);
-
-            return;
+            this->write_ = 0;
+            this->size_  = 0;
         }
 
-        const std::size_t old_active = active_;
-        const std::size_t new_active = 1 - active_;
+        /// @brief Get the number of valid elements currently stored.
+        /// @return Current element count.
+        [[nodiscard]] std::size_t size() const noexcept
+        {
+            return this->size_;
+        }
 
-        // new_active 此时一定是 Free
-        active_ = new_active;
+        /// @brief Get the fixed storage capacity.
+        /// @return Maximum number of elements the buffer can hold.
+        [[nodiscard]] static constexpr std::size_t capacity() noexcept
+        {
+            return N;
+        }
 
-        // release：
-        // 确保之前所有对 old_active 的写入
-        // 对 MCAP reader 可见
-        frozen_state_.store(
-            static_cast<int>(old_active),
-            std::memory_order_release);
-    }
+        /// @brief Check whether the buffer contains no elements.
+        /// @return True when empty.
+        [[nodiscard]] bool empty() const noexcept
+        {
+            return this->size_ == 0;
+        }
 
-private:
-    static constexpr int kNoFrozen = -1;
-    static constexpr int kDumping  = -2;
+        /// @brief Check whether the buffer has reached full capacity.
+        /// @return True when full.
+        [[nodiscard]] bool full() const noexcept
+        {
+            return this->size_ == N;
+        }
 
-    Ring buffers_[2];
+        /// @brief Access stored elements in chronological order as up to two spans.
+        /// @return One or two contiguous spans covering all valid elements.
+        [[nodiscard]] Segments chronological_segments() const noexcept
+        {
+            if (this->size_ == 0) return {};
 
-    // 只允许 Producer Thread 修改
-    std::size_t active_{0};
+            if (this->size_ < N)
+            {
+                return {std::span<const T>{this->data_.data(), this->size_}, {}};
+            }
 
-    // -1 : 没有 frozen
-    //  0 : buffer 0 frozen
-    //  1 : buffer 1 frozen
-    // -2 : MCAP thread 正在 dump
-    std::atomic<int> frozen_state_{kNoFrozen};
+            return {std::span<const T>{this->data_.data() + this->write_, N - this->write_}, std::span<const T>{this->data_.data(), this->write_}};
+        }
 
-    std::atomic<bool> freeze_requested_{false};
-};
+    private:
+        /// @brief Advance the write cursor and grow size until capacity is reached.
+        void advance() noexcept
+        {
+            ++this->write_;
 
-}
+            if (this->write_ == N) this->write_ = 0;
+
+            if (this->size_ < N) ++this->size_;
+        }
+
+    private:
+        std::array<T, N> data_{};
+        std::size_t      write_{0};
+        std::size_t      size_{0};
+    };
+
+    template <typename T, std::size_t N>
+    class DoubleRingBuffer
+    {
+    public:
+        /// @brief Special values used by the frozen-state atomic.
+        enum class FrozenState : int
+        {
+            /// @brief 正在转储冻结缓冲区，当前不可复用。
+            Dumping  = -2,
+            /// @brief 当前没有已冻结的缓冲区。
+            NoFrozen = -1,
+        };
+
+        using Ring = OverwriteRingBuffer<T, N>;
+
+        /// @brief Append a copied value to the active ring buffer.
+        /// @param value Value to append.
+        void push(const T& value)
+        {
+            this->service_freeze_request();
+            this->buffers_[this->active_].push(value);
+        }
+
+        /// @brief Append a moved value to the active ring buffer.
+        /// @param value Value to append.
+        void push(T&& value)
+        {
+            this->service_freeze_request();
+            this->buffers_[this->active_].push(std::move(value));
+        }
+
+        /// @brief Request that the current active buffer be frozen on the next push.
+        void request_freeze() noexcept
+        {
+            this->freeze_requested_.store(true, std::memory_order_release);
+        }
+
+        /// @brief Try to acquire the frozen ring for exclusive dumping.
+        /// @param index Receives the frozen buffer index on success.
+        /// @param ring Receives the frozen buffer pointer on success.
+        /// @return True if a frozen buffer was acquired.
+        bool try_acquire_frozen(std::size_t& index, const Ring*& ring) noexcept
+        {
+            int expected = this->frozen_state_.load(std::memory_order_acquire);
+
+            if (expected < 0) return false;
+
+            if (!this->frozen_state_.compare_exchange_strong(
+                    expected, static_cast<int>(FrozenState::Dumping), std::memory_order_acq_rel, std::memory_order_acquire))
+            {
+                return false;
+            }
+
+            index = static_cast<std::size_t>(expected);
+            ring  = &this->buffers_[index];
+            return true;
+        }
+
+        /// @brief Release a previously acquired frozen ring and mark it reusable.
+        /// @param index Index returned by `try_acquire_frozen`.
+        void release_frozen(std::size_t index)
+        {
+            this->buffers_[index].clear();
+            this->frozen_state_.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
+        }
+
+    private:
+        /// @brief Switch active buffers when a freeze request is pending.
+        void service_freeze_request()
+        {
+            if (!this->freeze_requested_.exchange(false, std::memory_order_acq_rel)) return;
+
+            if (this->frozen_state_.load(std::memory_order_acquire) != static_cast<int>(FrozenState::NoFrozen))
+            {
+                this->freeze_requested_.store(true, std::memory_order_release);
+                return;
+            }
+
+            const std::size_t old_active = this->active_;
+            this->active_                = 1 - this->active_;
+
+            this->frozen_state_.store(static_cast<int>(old_active), std::memory_order_release);
+        }
+
+    private:
+        Ring              buffers_[2];
+        std::size_t       active_{0};
+        std::atomic<int>  frozen_state_{static_cast<int>(FrozenState::NoFrozen)};
+        std::atomic<bool> freeze_requested_{false};
+    };
+
+}  // namespace flightLogger
