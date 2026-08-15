@@ -63,6 +63,7 @@ namespace flightLogger
     {
         uint64_t                                     pre_trigger_ns{0};
         uint64_t                                     post_trigger_ns{0};
+        std::filesystem::path                        output_path;
         std::string                                  profile{"flight_logger"};
         std::string                                  library{"flight_logger"};
         std::unordered_map<std::string, std::string> mcap_metadata;
@@ -116,7 +117,7 @@ namespace flightLogger
 
         RecorderState state() const noexcept;
 
-        void trigger(uint64_t trigger_time_ns, std::filesystem::path output_path, std::string reason = {});
+        void trigger(uint64_t trigger_time_ns, std::string reason = {});
 
         void stop();
 

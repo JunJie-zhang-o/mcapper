@@ -2,11 +2,11 @@
 
 #include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <exception>
 #include <limits>
 #include <mcap/writer.hpp>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -80,7 +80,7 @@ namespace flightLogger
             return this->state_;
         }
 
-        void trigger(uint64_t trigger_time_ns, std::filesystem::path output_path, std::string reason)
+        void trigger(uint64_t trigger_time_ns, std::string reason)
         {
             this->start();
 
@@ -89,11 +89,14 @@ namespace flightLogger
 
                 if (this->stopping_) throw std::logic_error("cannot trigger a stopping recorder");
 
+                if (this->state_ != RecorderState::Armed)
+                    throw std::logic_error("recorder is busy handling a previous trigger");
+
                 this->set_state_locked(RecorderState::FreezingPreTrigger);
 
                 for (auto& channel : this->channels_) channel->request_freeze_pre();
 
-                this->requests_.push_back(TriggerRequest{trigger_time_ns, std::move(output_path), std::move(reason)});
+                this->pending_request_.emplace(TriggerRequest{trigger_time_ns, this->options_.output_path, std::move(reason)});
             }
 
             this->cv_.notify_one();
@@ -120,7 +123,7 @@ namespace flightLogger
                 this->running_  = false;
                 this->stopping_ = false;
                 this->state_    = RecorderState::Idle;
-                this->requests_.clear();
+                this->pending_request_.reset();
                 error             = this->last_error_;
                 this->last_error_ = nullptr;
             }
@@ -161,12 +164,12 @@ namespace flightLogger
 
                 {
                     std::unique_lock<std::mutex> lock(this->mutex_);
-                    this->cv_.wait(lock, [this] { return this->stopping_ || !this->requests_.empty(); });
+                    this->cv_.wait(lock, [this] { return this->stopping_ || this->pending_request_.has_value(); });
 
-                    if (this->stopping_ && this->requests_.empty()) return;
+                    if (this->stopping_ && !this->pending_request_.has_value()) return;
 
-                    request = std::move(this->requests_.front());
-                    this->requests_.pop_front();
+                    request = std::move(*this->pending_request_);
+                    this->pending_request_.reset();
                 }
 
                 try
@@ -379,10 +382,10 @@ namespace flightLogger
         std::vector<std::unique_ptr<IFlightChannel>> channels_;
         uint32_t                                     next_channel_id_{1};
 
-        mutable std::mutex         mutex_;
-        std::condition_variable    cv_;
-        std::deque<TriggerRequest> requests_;
-        std::thread                worker_;
+        mutable std::mutex            mutex_;
+        std::condition_variable       cv_;
+        std::optional<TriggerRequest> pending_request_;
+        std::thread                   worker_;
         bool                       running_{false};
         bool                       stopping_{false};
         RecorderState              state_{RecorderState::Idle};
@@ -405,9 +408,9 @@ namespace flightLogger
         return this->impl_->state();
     }
 
-    void FlightRecorder::trigger(uint64_t trigger_time_ns, std::filesystem::path output_path, std::string reason)
+    void FlightRecorder::trigger(uint64_t trigger_time_ns, std::string reason)
     {
-        this->impl_->trigger(trigger_time_ns, std::move(output_path), std::move(reason));
+        this->impl_->trigger(trigger_time_ns, std::move(reason));
     }
 
     void FlightRecorder::stop()
