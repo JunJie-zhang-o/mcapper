@@ -94,7 +94,7 @@ int main()
     options.mcap_metadata["note"]  = "signal-triggered recording";
 
     FlightRecorder recorder{options};
-    recorder.register_channel("/imu/data", imu_ring, MessageEncoding::Json);
+    recorder.register_channel("/imu/data", imu_ring, MessageEncoding::Json, {{"sensor", "imu"}, {"source", "smoke"}});
 
     // ── 5. 启动后台采样线程 ──────────────────────────────────────────────────
     std::cout << "[mcapper] 开始采集 IMU 数据，按 Ctrl+C 触发转储并退出 ...\n";
@@ -136,9 +136,8 @@ int main()
     // ── 7. 收到信号 → 触发转储 ───────────────────────────────────────────────
     std::cout << "\n[mcapper] 收到退出信号，触发 mcap 转储 ...\n";
 
-    const uint64_t trigger_ts = now_ns();
     const std::string reason = g_shutdown_signal == SIGTERM ? "SIGTERM" : "SIGINT";
-    recorder.trigger(trigger_ts, reason);
+    recorder.trigger(reason);
 
     // stop() 阻塞直到 worker 完成 post_trigger 采集并把文件写完
     recorder.stop();
