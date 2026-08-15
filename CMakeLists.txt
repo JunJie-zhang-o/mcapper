@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 
 project(mcapper LANGUAGES C CXX)
 
@@ -20,6 +20,10 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERS
         "mcapper requires Clang 16 or newer for C++20.")
 endif()
 
+
+find_package(Threads REQUIRED)
+
+
 set(REFLECT_CPP_CORE_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/src/reflectcpp.cpp)
 set(REFLECT_CPP_JSON_SOURCE
@@ -35,6 +39,8 @@ target_compile_features(flight_logger PUBLIC cxx_std_20)
 target_include_directories(flight_logger
     PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mcap/include)
 
@@ -42,6 +48,10 @@ target_compile_definitions(flight_logger
     PRIVATE
     MCAP_COMPRESSION_NO_LZ4
     MCAP_COMPRESSION_NO_ZSTD)
+
+target_link_libraries(flight_logger
+    PUBLIC
+    Threads::Threads)
 
 add_library(flight_logger_rfl_deps STATIC
     ${REFLECT_CPP_CORE_SOURCE}
