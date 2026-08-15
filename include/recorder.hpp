@@ -78,6 +78,45 @@ namespace flightLogger
         FlightRecorder(const FlightRecorder&)            = delete;
         FlightRecorder& operator=(const FlightRecorder&) = delete;
 
+        // =====================================================================
+        // register_channel 系列重载
+        // ---------------------------------------------------------------------
+        // 提供三种由低到高的注册方式,内部逐层转发,最终都汇聚到 (1) 号重载:
+        //   (1) 传入自定义 ISerializer<T> 智能指针      —— 最灵活,最底层
+        //   (2) 传入一个 std::function / lambda        —— 中间便捷层
+        //   (3) 只传 topic 与 MessageEncoding 枚举     —— 最简 API,自动建 codec
+        // =====================================================================
+
+        /**
+         * @brief (1) 底层重载:使用调用方自行构造的 ISerializer<T>。
+         *
+         * 该重载真正执行注册动作:分配唯一 channel id,构造 FlightChannel,
+         * 再通过类型擦除接口交给内部 Impl 管理。其它重载最终都会转发到这里。
+         *
+         * @tparam T           消息类型
+         * @tparam N           环形缓冲容量(编译期常量)
+         * @param  info        通道信息(id 字段会被内部覆盖,无需填写)
+         * @param  ring        与生产者共享的三缓冲环 TripleRingBuffer
+         * @param  serializer  std::unique_ptr<ISerializer<T>>,负责把 T 序列化为字节
+         *
+         * @code
+         * // 用户自定义一个 ISerializer 派生类
+         * class MyProtoSerializer : public flightLogger::ISerializer<MyMsg> {
+         *     flightLogger::SerializedPayload serialize(const MyMsg& m) override {
+         *         // ... 自定义高性能编码 ...
+         *     }
+         * };
+         *
+         * flightLogger::ChannelInfo info;
+         * info.topic            = "/imu";
+         * info.message_encoding = "protobuf";
+         * info.schema_name      = "MyMsg";
+         * // schema_encoding / schema_data 视需要填写
+         *
+         * recorder.register_channel<MyMsg, 1024>(
+         *     std::move(info), ring, std::make_unique<MyProtoSerializer>());
+         * @endcode
+         */
         template <typename T, std::size_t N>
         void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>, N>& ring, typename FlightChannel<T, N>::Serializer serializer)
         {
@@ -85,15 +124,65 @@ namespace flightLogger
             this->register_channel_erased(std::make_unique<FlightChannel<T, N>>(std::move(info), ring, std::move(serializer)));
         }
 
+        /**
+         * @brief (2) 便捷重载:直接传入一个可调用对象(lambda / std::function)。
+         *
+         * 内部会用 FunctionSerializer<T> 把该可调用对象包装成 ISerializer<T>,
+         * 然后转发到 (1) 号重载。适合“临时写一个编码函数”的场景,免去派生一个类。
+         *
+         * @tparam T           消息类型
+         * @tparam N           环形缓冲容量
+         * @param  info        通道信息(id 字段无需填写)
+         * @param  ring        三缓冲环
+         * @param  serializer  形如 `SerializedPayload(const T&)` 的可调用对象
+         *
+         * @code
+         * flightLogger::ChannelInfo info;
+         * info.topic            = "/debug/counter";
+         * info.message_encoding = "raw";
+         * info.schema_name      = "uint64";
+         *
+         * recorder.register_channel<uint64_t, 256>(
+         *     std::move(info), ring,
+         *     [](const uint64_t& v) -> flightLogger::SerializedPayload {
+         *         flightLogger::SerializedPayload out(sizeof(v));
+         *         std::memcpy(out.data(), &v, sizeof(v));
+         *         return out;
+         *     });
+         * @endcode
+         */
         template <typename T, std::size_t N>
         void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>, N>& ring, typename FunctionSerializer<T>::Function serializer)
         {
-            this->register_channel<T, N>(
-                std::move(info),
-                ring,
-                std::make_unique<FunctionSerializer<T>>(std::move(serializer)));
+            this->register_channel<T, N>(std::move(info), ring, std::make_unique<FunctionSerializer<T>>(std::move(serializer)));
         }
 
+        /**
+         * @brief (3) 高层重载:只需指定 topic 和 MessageEncoding,库自动完成其余配置。
+         *
+         * 内部行为:
+         *   1. 通过 `detail::make_codec<T>(encoding)` 创建对应编码的 codec
+         *      (codec 派生自 ICodec<T> ⊂ ISerializer<T>);
+         *   2. 从 codec 中提取 SchemaInfo(name / encoding / data)自动填入 ChannelInfo;
+         *   3. 转发到 (1) 号重载完成注册。
+         *
+         * 这是最常用、最推荐的入口——调用方无需关心 schema 生成、无需手写序列化函数。
+         *
+         * @tparam T         消息类型(必须被对应 codec 支持,例如 JSON 需可反射)
+         * @tparam N         环形缓冲容量
+         * @param  topic     MCAP 中的 topic 名(例如 "/imu/data")
+         * @param  ring      三缓冲环
+         * @param  encoding  期望的消息编码格式(JSON / CBOR / MsgPack / ...)
+         *
+         * @code
+         * struct ImuData { double ax, ay, az; uint64_t stamp; };
+         *
+         * flightLogger::TripleRingBuffer<flightLogger::TimedRecord<ImuData>, 1024> ring;
+         *
+         * recorder.register_channel<ImuData, 1024>(
+         *     "/imu/data", ring, flightLogger::MessageEncoding::Json);
+         * @endcode
+         */
         template <typename T, std::size_t N>
         void register_channel(std::string topic, TripleRingBuffer<TimedRecord<T>, N>& ring, MessageEncoding encoding)
         {
