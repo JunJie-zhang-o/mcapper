@@ -72,9 +72,9 @@ namespace flightLogger
             };
         }
 
-        MessageEncoding message_encoding() const noexcept override
+        std::string_view message_encoding() const noexcept override
         {
-            return MessageEncoding::Json;
+            return "json";
         }
 
     private:
@@ -107,9 +107,9 @@ namespace flightLogger
             };
         }
 
-        MessageEncoding message_encoding() const noexcept override
+        std::string_view message_encoding() const noexcept override
         {
-            return MessageEncoding::MsgPack;
+            return "msgpack";
         }
 
     private:

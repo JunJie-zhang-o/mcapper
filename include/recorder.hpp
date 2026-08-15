@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <rfl/enums.hpp>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -192,7 +191,7 @@ namespace flightLogger
             auto        schema = codec->schema();
 
             info.topic             = std::move(topic);
-            info.message_encoding  = rfl::enum_to_string(codec->message_encoding());
+            info.message_encoding  = codec->message_encoding();
             info.schema_name       = std::move(schema.name);
             info.schema_encoding   = std::move(schema.encoding);
             info.schema_data       = std::move(schema.data);

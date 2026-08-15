@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "serializer.hpp"
 
@@ -26,7 +27,7 @@ namespace flightLogger
 
         virtual SchemaInfo schema() const = 0;
 
-        virtual MessageEncoding message_encoding() const noexcept = 0;
+        virtual std::string_view message_encoding() const noexcept = 0;
     };
 
 }  // namespace flightLogger
