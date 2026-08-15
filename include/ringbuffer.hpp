@@ -122,14 +122,14 @@ namespace flightLogger
     };
 
     template <typename T, std::size_t N>
-    class DoubleRingBuffer
+    class TripleRingBuffer
     {
     public:
         /// @brief Special values used by the frozen-state atomic.
         enum class FrozenState : int
         {
             /// @brief 正在转储冻结缓冲区，当前不可复用。
-            Dumping  = -2,
+            Dumping = -2,
             /// @brief 当前没有已冻结的缓冲区。
             NoFrozen = -1,
         };
@@ -140,7 +140,7 @@ namespace flightLogger
         /// @param value Value to append.
         void push(const T& value)
         {
-            this->service_freeze_request();
+            this->service_freeze_requests();
             this->buffers_[this->active_].push(value);
         }
 
@@ -148,68 +148,146 @@ namespace flightLogger
         /// @param value Value to append.
         void push(T&& value)
         {
-            this->service_freeze_request();
+            this->service_freeze_requests();
             this->buffers_[this->active_].push(std::move(value));
         }
 
-        /// @brief Request that the current active buffer be frozen on the next push.
-        void request_freeze() noexcept
+        /// @brief Request that the current active buffer be frozen as pre-trigger data on the next push.
+        void request_freeze_pre() noexcept
         {
-            this->freeze_requested_.store(true, std::memory_order_release);
+            this->freeze_pre_requested_.store(true, std::memory_order_release);
+        }
+
+        /// @brief Request that the current active buffer be frozen as post-trigger data on the next push.
+        void request_freeze_post() noexcept
+        {
+            this->freeze_post_requested_.store(true, std::memory_order_release);
         }
 
         /// @brief Try to acquire the frozen ring for exclusive dumping.
         /// @param index Receives the frozen buffer index on success.
         /// @param ring Receives the frozen buffer pointer on success.
         /// @return True if a frozen buffer was acquired.
-        bool try_acquire_frozen(std::size_t& index, const Ring*& ring) noexcept
+        bool try_acquire_frozen_pre(std::size_t& index, const Ring*& ring) noexcept
         {
-            int expected = this->frozen_state_.load(std::memory_order_acquire);
+            return this->try_acquire_frozen(this->frozen_pre_state_, this->frozen_pre_index_, index, ring);
+        }
+
+        /// @brief Try to acquire the post-trigger frozen ring for exclusive dumping.
+        /// @param index Receives the frozen buffer index on success.
+        /// @param ring Receives the frozen buffer pointer on success.
+        /// @return True if a frozen buffer was acquired.
+        bool try_acquire_frozen_post(std::size_t& index, const Ring*& ring) noexcept
+        {
+            return this->try_acquire_frozen(this->frozen_post_state_, this->frozen_post_index_, index, ring);
+        }
+
+        /// @brief Release a previously acquired pre-trigger frozen ring and mark it reusable.
+        /// @param index Index returned by `try_acquire_frozen_pre`.
+        void release_frozen_pre(std::size_t index)
+        {
+            this->release_frozen(this->frozen_pre_state_, this->frozen_pre_index_, index);
+        }
+
+        /// @brief Release a previously acquired post-trigger frozen ring and mark it reusable.
+        /// @param index Index returned by `try_acquire_frozen_post`.
+        void release_frozen_post(std::size_t index)
+        {
+            this->release_frozen(this->frozen_post_state_, this->frozen_post_index_, index);
+        }
+
+    private:
+        bool try_acquire_frozen(std::atomic<int>& state, std::atomic<int>& frozen_index, std::size_t& index, const Ring*& ring) noexcept
+        {
+            int expected = state.load(std::memory_order_acquire);
 
             if (expected < 0) return false;
 
-            if (!this->frozen_state_.compare_exchange_strong(
-                    expected, static_cast<int>(FrozenState::Dumping), std::memory_order_acq_rel, std::memory_order_acquire))
-            {
+            if (!state.compare_exchange_strong(expected, static_cast<int>(FrozenState::Dumping), std::memory_order_acq_rel, std::memory_order_acquire))
                 return false;
-            }
 
             index = static_cast<std::size_t>(expected);
-            ring  = &this->buffers_[index];
+            frozen_index.store(expected, std::memory_order_release);
+            ring = &this->buffers_[index];
             return true;
         }
 
-        /// @brief Release a previously acquired frozen ring and mark it reusable.
-        /// @param index Index returned by `try_acquire_frozen`.
-        void release_frozen(std::size_t index)
+        void release_frozen(std::atomic<int>& state, std::atomic<int>& frozen_index, std::size_t index)
         {
             this->buffers_[index].clear();
-            this->frozen_state_.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
+            state.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
+            frozen_index.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
         }
 
-    private:
         /// @brief Switch active buffers when a freeze request is pending.
-        void service_freeze_request()
+        void service_freeze_requests()
         {
-            if (!this->freeze_requested_.exchange(false, std::memory_order_acq_rel)) return;
-
-            if (this->frozen_state_.load(std::memory_order_acquire) != static_cast<int>(FrozenState::NoFrozen))
+            if (this->freeze_pre_requested_.exchange(false, std::memory_order_acq_rel))
             {
-                this->freeze_requested_.store(true, std::memory_order_release);
-                return;
+                if (!this->freeze_active_into(this->frozen_pre_state_, this->frozen_pre_index_))
+                    this->freeze_pre_requested_.store(true, std::memory_order_release);
             }
 
-            const std::size_t old_active = this->active_;
-            this->active_                = 1 - this->active_;
+            if (this->freeze_post_requested_.exchange(false, std::memory_order_acq_rel))
+            {
+                if (!this->freeze_active_into(this->frozen_post_state_, this->frozen_post_index_))
+                    this->freeze_post_requested_.store(true, std::memory_order_release);
+            }
+        }
 
-            this->frozen_state_.store(static_cast<int>(old_active), std::memory_order_release);
+        bool freeze_active_into(std::atomic<int>& state, std::atomic<int>& frozen_index)
+        {
+            if (state.load(std::memory_order_acquire) != static_cast<int>(FrozenState::NoFrozen)) return false;
+
+            std::size_t next_active = 0;
+            if (!this->find_next_active(next_active)) return false;
+
+            const std::size_t old_active = this->active_;
+            this->active_                = next_active;
+
+            frozen_index.store(static_cast<int>(old_active), std::memory_order_release);
+            state.store(static_cast<int>(old_active), std::memory_order_release);
+            return true;
+        }
+
+        bool find_next_active(std::size_t& next_active) const noexcept
+        {
+            for (std::size_t offset = 1; offset < 3; ++offset)
+            {
+                const std::size_t candidate = (this->active_ + offset) % 3;
+
+                if (this->is_available(candidate))
+                {
+                    next_active = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        bool is_available(std::size_t index) const noexcept
+        {
+            return !this->is_frozen_index(this->frozen_pre_state_, this->frozen_pre_index_, index) &&
+                   !this->is_frozen_index(this->frozen_post_state_, this->frozen_post_index_, index);
+        }
+
+        bool is_frozen_index(const std::atomic<int>& state, const std::atomic<int>& frozen_index, std::size_t index) const noexcept
+        {
+            if (state.load(std::memory_order_acquire) == static_cast<int>(FrozenState::NoFrozen)) return false;
+
+            return frozen_index.load(std::memory_order_acquire) == static_cast<int>(index);
         }
 
     private:
-        Ring              buffers_[2];
+        Ring              buffers_[3];
         std::size_t       active_{0};
-        std::atomic<int>  frozen_state_{static_cast<int>(FrozenState::NoFrozen)};
-        std::atomic<bool> freeze_requested_{false};
+        std::atomic<int>  frozen_pre_state_{static_cast<int>(FrozenState::NoFrozen)};
+        std::atomic<int>  frozen_pre_index_{static_cast<int>(FrozenState::NoFrozen)};
+        std::atomic<int>  frozen_post_state_{static_cast<int>(FrozenState::NoFrozen)};
+        std::atomic<int>  frozen_post_index_{static_cast<int>(FrozenState::NoFrozen)};
+        std::atomic<bool> freeze_pre_requested_{false};
+        std::atomic<bool> freeze_post_requested_{false};
     };
 
 }  // namespace flightLogger
