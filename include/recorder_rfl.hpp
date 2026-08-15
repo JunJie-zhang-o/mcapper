@@ -2,6 +2,7 @@
 
 #include <rfl/enums.hpp>
 #include <rfl/json.hpp>
+#include <rfl/type_name_t.hpp>
 
 #include "codec.hpp"
 #include "recorder.hpp"
@@ -41,17 +42,9 @@ namespace flightLogger
         template <typename T>
         std::string type_name()
         {
-            constexpr std::string_view prefix = "std::string flightLogger::detail::type_name() [with T = ";
-            constexpr std::string_view suffix = "; std::string = std::__cxx11::basic_string<char>]";
-            std::string_view           name   = __PRETTY_FUNCTION__;
-
-            if (name.starts_with(prefix) && name.ends_with(suffix))
-            {
-                name.remove_prefix(prefix.size());
-                name.remove_suffix(suffix.size());
-            }
-
-            return std::string{name};
+            // 直接复用 reflect-cpp 的编译期类型名(GCC / Clang / MSVC 均支持)。
+            // rfl::type_name_t<T> 是 rfl::Literal<...> 的别名,.str() 转为 std::string。
+            return rfl::type_name_t<T>().str();
         }
 
         inline std::string unsupported_encoding_message(MessageEncoding encoding)
