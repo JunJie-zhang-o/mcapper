@@ -5,6 +5,7 @@
 #include <ctime>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <mcap/writer.hpp>
@@ -13,7 +14,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <stop_token>
+#include <string>
+#include <string_view>
+#include <sys/utsname.h>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "recorder.hpp"
@@ -33,6 +38,78 @@ namespace flightLogger
             if (std::numeric_limits<uint64_t>::max() - lhs < rhs) return std::numeric_limits<uint64_t>::max();
 
             return lhs + rhs;
+        }
+
+        uint64_t now_steady_ns() noexcept
+        {
+            using namespace std::chrono;
+            return static_cast<uint64_t>(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
+        }
+
+        std::string unquote_os_release_value(std::string value)
+        {
+            if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') || (value.front() == '\'' && value.back() == '\'')))
+            {
+                value = value.substr(1, value.size() - 2);
+            }
+
+            return value;
+        }
+
+        std::string read_os_pretty_name()
+        {
+            std::ifstream os_release{"/etc/os-release"};
+            std::string   line;
+
+            while (std::getline(os_release, line))
+            {
+                constexpr std::string_view key{"PRETTY_NAME="};
+                if (line.starts_with(key)) return unquote_os_release_value(line.substr(key.size()));
+            }
+
+            return {};
+        }
+
+        std::unordered_map<std::string, std::string> make_os_info_metadata()
+        {
+            struct utsname uts_info
+            {
+            };
+
+            const bool has_uname = ::uname(&uts_info) == 0;
+
+            std::unordered_map<std::string, std::string> metadata;
+            metadata["version"] = read_os_pretty_name();
+            if (metadata["version"].empty()) metadata["version"] = has_uname ? uts_info.sysname : "unknown";
+            metadata["kernel"] = has_uname ? uts_info.release : "unknown";
+            metadata["arch"]   = has_uname ? uts_info.machine : "unknown";
+
+            return metadata;
+        }
+
+        std::string format_wall_time_ms(std::chrono::system_clock::time_point time_point)
+        {
+            using namespace std::chrono;
+
+            const auto time_t_s = system_clock::to_time_t(time_point);
+            const auto ms_part  = duration_cast<milliseconds>(time_point.time_since_epoch()) % 1000;
+
+            std::tm tm_buf{};
+            ::localtime_r(&time_t_s, &tm_buf);
+
+            std::ostringstream oss;
+            oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S") << '.' << std::setw(3) << std::setfill('0') << ms_part.count();
+
+            return oss.str();
+        }
+
+        void write_metadata_record(mcap::McapWriter& writer, std::string name, std::unordered_map<std::string, std::string> metadata_map)
+        {
+            mcap::Metadata metadata;
+            metadata.name     = std::move(name);
+            metadata.metadata = std::move(metadata_map);
+
+            throw_if_mcap_error(writer.write(metadata));
         }
 
     }  // namespace
@@ -82,6 +159,7 @@ namespace flightLogger
         void trigger(uint64_t trigger_time_ns, std::string reason)
         {
             this->start();
+            const auto trigger_wall_time = std::chrono::system_clock::now();
 
             {
                 std::lock_guard<std::mutex> lock(this->mutex_);
@@ -95,7 +173,7 @@ namespace flightLogger
 
                 for (auto& channel : this->channels_) channel->request_freeze_pre();
 
-                this->pending_request_.emplace(TriggerRequest{trigger_time_ns, std::move(reason)});
+                this->pending_request_.emplace(TriggerRequest{trigger_time_ns, std::move(reason), trigger_wall_time});
             }
 
             this->cv_.notify_one();
@@ -134,8 +212,9 @@ namespace flightLogger
     private:
         struct TriggerRequest
         {
-            uint64_t    trigger_time_ns;
-            std::string reason;
+            uint64_t                              trigger_time_ns;
+            std::string                           reason;
+            std::chrono::system_clock::time_point trigger_wall_time;
         };
 
         enum class FrozenWindow
@@ -370,21 +449,26 @@ namespace flightLogger
 
         void write_metadata(mcap::McapWriter& writer, const TriggerRequest& request, uint64_t begin_time, uint64_t end_time)
         {
-            auto metadata_map               = this->options_.mcap_metadata;
-            metadata_map["format_version"]  = "1";
-            metadata_map["trigger_time_ns"] = std::to_string(request.trigger_time_ns);
-            metadata_map["begin_time_ns"]   = std::to_string(begin_time);
-            metadata_map["end_time_ns"]     = std::to_string(end_time);
-            metadata_map["pre_trigger_ns"]  = std::to_string(this->options_.pre_trigger_ns);
-            metadata_map["post_trigger_ns"] = std::to_string(this->options_.post_trigger_ns);
-            metadata_map["reason"]          = request.reason;
-            metadata_map["channel_count"]   = std::to_string(this->channels_.size());
+            write_metadata_record(writer, "OS_INFO", make_os_info_metadata());
 
-            mcap::Metadata metadata;
-            metadata.name     = "flight_recorder";
-            metadata.metadata = std::move(metadata_map);
+            std::unordered_map<std::string, std::string> trigger_info;
+            trigger_info["trigger_time"]    = format_wall_time_ms(request.trigger_wall_time);
+            trigger_info["trigger_time_ns"] = std::to_string(request.trigger_time_ns);
+            trigger_info["reason"]          = request.reason;
+            write_metadata_record(writer, "TRIGGER_INFO", std::move(trigger_info));
 
-            throw_if_mcap_error(writer.write(metadata));
+            auto recorder_options               = this->options_.mcap_metadata;
+            recorder_options["format_version"]  = "1";
+            recorder_options["begin_time_ns"]   = std::to_string(begin_time);
+            recorder_options["end_time_ns"]     = std::to_string(end_time);
+            recorder_options["pre_trigger_ns"]  = std::to_string(this->options_.pre_trigger_ns);
+            recorder_options["post_trigger_ns"] = std::to_string(this->options_.post_trigger_ns);
+            recorder_options["output_path"]      = this->options_.output_path;
+            recorder_options["output_file_name"] = this->options_.output_file_name;
+            recorder_options["profile"]          = this->options_.profile;
+            recorder_options["library"]          = this->options_.library;
+            recorder_options["channel_count"]    = std::to_string(this->channels_.size());
+            write_metadata_record(writer, "RECORDER_OPTIONS", std::move(recorder_options));
         }
 
         std::filesystem::path make_output_path() const
@@ -453,6 +537,11 @@ namespace flightLogger
     void FlightRecorder::trigger(uint64_t trigger_time_ns, std::string reason)
     {
         this->impl_->trigger(trigger_time_ns, std::move(reason));
+    }
+
+    void FlightRecorder::trigger(std::string reason)
+    {
+        this->impl_->trigger(now_steady_ns(), std::move(reason));
     }
 
     void FlightRecorder::stop()

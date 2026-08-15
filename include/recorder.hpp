@@ -182,7 +182,10 @@ namespace flightLogger
          * @endcode
          */
         template <typename T, std::size_t N>
-        void register_channel(std::string topic, TripleRingBuffer<TimedRecord<T>, N>& ring, MessageEncoding encoding)
+        void register_channel(std::string topic,
+                              TripleRingBuffer<TimedRecord<T>, N>& ring,
+                              MessageEncoding encoding,
+                              std::unordered_map<std::string, std::string> metadata = {})
         {
             using Value = std::remove_cvref_t<T>;
 
@@ -195,6 +198,7 @@ namespace flightLogger
             info.schema_name       = std::move(schema.name);
             info.schema_encoding   = std::move(schema.encoding);
             info.schema_data       = std::move(schema.data);
+            info.metadata          = std::move(metadata);
             info.metadata["topic"] = info.topic;
 
             this->register_channel<Value, N>(std::move(info), ring, std::move(codec));
@@ -204,6 +208,7 @@ namespace flightLogger
 
         RecorderState state() const noexcept;
 
+        void trigger(std::string reason);
         void trigger(uint64_t trigger_time_ns, std::string reason = {});
 
         void stop();
