@@ -2,12 +2,15 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <ctime>
 #include <exception>
 #include <filesystem>
+#include <iomanip>
 #include <limits>
 #include <mcap/writer.hpp>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <stop_token>
 #include <thread>
@@ -389,8 +392,20 @@ namespace flightLogger
             std::filesystem::path output_dir{this->options_.output_path};
             std::filesystem::create_directories(output_dir);
 
-            const auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-            return output_dir / (this->options_.output_file_name + "_" + std::to_string(timestamp) + ".mcap");
+            // 生成形如 "前缀-年月日_时分秒_毫秒" 的时间戳(本地时间,毫秒精度)。
+            using namespace std::chrono;
+
+            const auto now      = system_clock::now();
+            const auto time_t_s = system_clock::to_time_t(now);
+            const auto ms_part  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+            std::tm tm_buf{};
+            ::localtime_r(&time_t_s, &tm_buf);
+
+            std::ostringstream oss;
+            oss << std::put_time(&tm_buf, "%Y%m%d_%H%M%S") << '_' << std::setw(3) << std::setfill('0') << ms_part.count();
+
+            return output_dir / (this->options_.output_file_name + "-" + oss.str() + ".mcap");
         }
 
         void set_state(RecorderState state) noexcept
