@@ -1,11 +1,9 @@
 #pragma once
 
-#include <rfl/enums.hpp>
-
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <memory>
+#include <rfl/enums.hpp>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -63,7 +61,8 @@ namespace flightLogger
     {
         uint64_t                                     pre_trigger_ns{0};
         uint64_t                                     post_trigger_ns{0};
-        std::filesystem::path                        output_path;
+        std::string                                  output_path{"."};
+        std::string                                  output_file_name{"flight_logger"};
         std::string                                  profile{"flight_logger"};
         std::string                                  library{"flight_logger"};
         std::unordered_map<std::string, std::string> mcap_metadata;

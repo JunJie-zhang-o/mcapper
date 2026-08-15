@@ -3,11 +3,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <filesystem>
 #include <limits>
 #include <mcap/writer.hpp>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -37,6 +39,7 @@ namespace flightLogger
     public:
         explicit Impl(FlightRecorderOptions options) : options_(std::move(options))
         {
+            this->start_worker();
         }
 
         ~Impl()
@@ -48,7 +51,7 @@ namespace flightLogger
         {
             std::lock_guard<std::mutex> lock(this->mutex_);
 
-            if (this->running_) throw std::logic_error("cannot register channel after recorder start");
+            this->throw_if_registration_closed_locked();
 
             return this->next_channel_id_++;
         }
@@ -57,21 +60,14 @@ namespace flightLogger
         {
             std::lock_guard<std::mutex> lock(this->mutex_);
 
-            if (this->running_) throw std::logic_error("cannot register channel after recorder start");
+            this->throw_if_registration_closed_locked();
 
             this->channels_.push_back(std::move(channel));
         }
 
         void start()
         {
-            std::lock_guard<std::mutex> lock(this->mutex_);
-
-            if (this->running_) return;
-
-            this->stopping_ = false;
-            this->running_  = true;
-            this->state_    = RecorderState::Armed;
-            this->worker_   = std::thread([this] { this->worker_loop(); });
+            this->start_worker();
         }
 
         RecorderState state() const noexcept
@@ -89,14 +85,14 @@ namespace flightLogger
 
                 if (this->stopping_) throw std::logic_error("cannot trigger a stopping recorder");
 
-                if (this->state_ != RecorderState::Armed)
-                    throw std::logic_error("recorder is busy handling a previous trigger");
+                if (this->state_ != RecorderState::Armed) throw std::logic_error("recorder is busy handling a previous trigger");
 
+                this->registration_closed_ = true;
                 this->set_state_locked(RecorderState::FreezingPreTrigger);
 
                 for (auto& channel : this->channels_) channel->request_freeze_pre();
 
-                this->pending_request_.emplace(TriggerRequest{trigger_time_ns, this->options_.output_path, std::move(reason)});
+                this->pending_request_.emplace(TriggerRequest{trigger_time_ns, std::move(reason)});
             }
 
             this->cv_.notify_one();
@@ -107,9 +103,10 @@ namespace flightLogger
             {
                 std::lock_guard<std::mutex> lock(this->mutex_);
 
-                if (!this->running_) return;
+                if (!this->worker_.joinable()) return;
 
                 this->stopping_ = true;
+                this->worker_.request_stop();
             }
 
             this->cv_.notify_one();
@@ -120,9 +117,9 @@ namespace flightLogger
 
             {
                 std::lock_guard<std::mutex> lock(this->mutex_);
-                this->running_  = false;
-                this->stopping_ = false;
-                this->state_    = RecorderState::Idle;
+                this->stopping_            = false;
+                this->registration_closed_ = false;
+                this->state_               = RecorderState::Idle;
                 this->pending_request_.reset();
                 error             = this->last_error_;
                 this->last_error_ = nullptr;
@@ -134,9 +131,8 @@ namespace flightLogger
     private:
         struct TriggerRequest
         {
-            uint64_t              trigger_time_ns;
-            std::filesystem::path output_path;
-            std::string           reason;
+            uint64_t    trigger_time_ns;
+            std::string reason;
         };
 
         enum class FrozenWindow
@@ -156,7 +152,28 @@ namespace flightLogger
             }
         }
 
-        void worker_loop()
+        void start_worker()
+        {
+            std::lock_guard<std::mutex> lock(this->mutex_);
+
+            if (this->worker_.joinable()) return;
+
+            this->stopping_ = false;
+            this->state_    = RecorderState::Armed;
+            this->worker_   = std::jthread([this](std::stop_token stop_token) { this->worker_loop(stop_token); });
+        }
+
+        void throw_if_registration_closed_locked() const
+        {
+            if (this->stopping_) throw std::logic_error("cannot register channel while recorder is stopping");
+
+            if (this->registration_closed_) throw std::logic_error("cannot register channel after recorder trigger");
+
+            if (this->state_ != RecorderState::Idle && this->state_ != RecorderState::Armed)
+                throw std::logic_error("cannot register channel while recorder is busy");
+        }
+
+        void worker_loop(std::stop_token stop_token)
         {
             for (;;)
             {
@@ -164,9 +181,9 @@ namespace flightLogger
 
                 {
                     std::unique_lock<std::mutex> lock(this->mutex_);
-                    this->cv_.wait(lock, [this] { return this->stopping_ || this->pending_request_.has_value(); });
+                    this->cv_.wait(lock, stop_token, [this] { return this->pending_request_.has_value(); });
 
-                    if (this->stopping_ && !this->pending_request_.has_value()) return;
+                    if (!this->pending_request_.has_value()) return;
 
                     request = std::move(*this->pending_request_);
                     this->pending_request_.reset();
@@ -180,7 +197,7 @@ namespace flightLogger
                 {
                     std::lock_guard<std::mutex> lock(this->mutex_);
                     this->last_error_ = std::current_exception();
-                    this->state_      = this->stopping_ ? RecorderState::Finalizing : RecorderState::Armed;
+                    this->state_      = stop_token.stop_requested() ? RecorderState::Finalizing : RecorderState::Armed;
                 }
             }
         }
@@ -197,7 +214,8 @@ namespace flightLogger
             writer_options.compression = mcap::Compression::None;
 
             mcap::McapWriter writer;
-            throw_if_mcap_error(writer.open(request.output_path.string(), writer_options));
+            const auto       output_path = this->make_output_path();
+            throw_if_mcap_error(writer.open(output_path.string(), writer_options));
 
             const auto channel_ids = this->register_mcap_channels(writer);
             this->write_metadata(writer, request, begin_time, end_time);
@@ -366,6 +384,15 @@ namespace flightLogger
             throw_if_mcap_error(writer.write(metadata));
         }
 
+        std::filesystem::path make_output_path() const
+        {
+            std::filesystem::path output_dir{this->options_.output_path};
+            std::filesystem::create_directories(output_dir);
+
+            const auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+            return output_dir / (this->options_.output_file_name + "_" + std::to_string(timestamp) + ".mcap");
+        }
+
         void set_state(RecorderState state) noexcept
         {
             std::lock_guard<std::mutex> lock(this->mutex_);
@@ -383,13 +410,13 @@ namespace flightLogger
         uint32_t                                     next_channel_id_{1};
 
         mutable std::mutex            mutex_;
-        std::condition_variable       cv_;
+        std::condition_variable_any   cv_;
         std::optional<TriggerRequest> pending_request_;
-        std::thread                   worker_;
-        bool                       running_{false};
-        bool                       stopping_{false};
-        RecorderState              state_{RecorderState::Idle};
-        std::exception_ptr         last_error_;
+        std::jthread                  worker_;
+        bool                          stopping_{false};
+        bool                          registration_closed_{false};
+        RecorderState                 state_{RecorderState::Idle};
+        std::exception_ptr            last_error_;
     };
 
     FlightRecorder::FlightRecorder(FlightRecorderOptions options) : impl_(std::make_unique<Impl>(std::move(options)))
