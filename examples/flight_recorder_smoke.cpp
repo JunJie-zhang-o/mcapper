@@ -2,8 +2,10 @@
 
 #include <rfl.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <thread>
 
 struct ImuSample
 {
@@ -16,11 +18,12 @@ int main()
 {
     using namespace flightLogger;
 
-    DoubleRingBuffer<TimedRecord<ImuSample>, 16> imu_ring;
+    TripleRingBuffer<TimedRecord<ImuSample>, 16> imu_ring;
 
     FlightRecorderOptions options;
     options.pre_trigger_ns = 10;
-    options.post_trigger_ns = 0;
+    options.post_trigger_ns = 1;
+    options.output_path = std::filesystem::temp_directory_path() / "flight_logger_smoke.mcap";
     options.mcap_metadata["robot"] = "smoke";
 
     FlightRecorder recorder{options};
@@ -29,12 +32,14 @@ int main()
     imu_ring.push(TimedRecord<ImuSample>{90, ImuSample{1.0, 2.0, 3.0}});
     imu_ring.push(TimedRecord<ImuSample>{100, ImuSample{4.0, 5.0, 6.0}});
 
-    recorder.trigger(
-        100,
-        std::filesystem::temp_directory_path() / "flight_logger_smoke.mcap",
-        "smoke");
+    recorder.trigger(100, "smoke");
 
     imu_ring.push(TimedRecord<ImuSample>{101, ImuSample{7.0, 8.0, 9.0}});
+    for (uint64_t timestamp = 102; timestamp < 130; ++timestamp)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        imu_ring.push(TimedRecord<ImuSample>{timestamp, ImuSample{7.0, 8.0, 9.0}});
+    }
     recorder.stop();
 
     return 0;
