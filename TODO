@@ -1,0 +1,59 @@
+
+
+
+
+
+
+Perf:
+    ☐ 感觉用时间来定义这个不是非常合适，是否可以采用最开始的时候定义好长度 或者更好的去通过时间去计算长度的方式
+    ✔ 将trigger的具体时间记录下来写到metadata中 @done(26-08-15 23:05)
+
+    
+    ✔ channel自身创建的时候也可以添加metadata @done(26-08-15 23:01)
+    ☐ metadata
+        ☐ 机器人序列号 name ns
+            ☐ 型号
+            ☐ 中间件软件版本
+            ☐ 嵌入式软件版本
+            ☐ 序列号
+        ✔ 触发源 @done(26-08-15 22:51)
+            ✔ 触发时间 @done(26-08-15 22:51)
+            ✔ 触发原因 @done(26-08-15 22:51)
+        ✔ 系统信息 @done(26-08-15 22:51)
+            ✔ 版本 @done(26-08-15 22:51)
+            ✔ 内核 @done(26-08-15 22:51)
+            ✔ 架构 @done(26-08-15 22:51)
+        ☐ 时间源
+            ☐ 时间同步方案
+            ☐ 时间源
+
+        ☐ ROS侧自动生成schema
+            ☐ ROS1
+            ☐ ROS2
+
+
+
+    ☐ mcap 查看工具
+
+      wget https://github.com/foxglove/mcap/releases/latest/download/mcap-linux-amd64 -O mcap
+      wget https://github.com/foxglove/mcap/releases/latest/download/mcap-linux-arm64 -O mcap
+      chmod +x mcap
+      sudo mv mcap /usr/local/bin/
+
+    ☐ 支持Attachment 放置配置的读取信息
+
+    ☐ 配置(这种只支持通信的方式)
+        ☐ 应该可以配置记录的话题和触发的话题等
+
+
+    ☐ cli
+    ☐ 目前可以通过cli去记录数据但是写入需要kill程序才行
+        ☐ bridge 应该作为单独集成的exe程序 而不是集成再主库中
+            ☐ ros1_bridge
+            ☐ ros2_bridge
+            ☐ zmq
+    
+    
+
+
+    
