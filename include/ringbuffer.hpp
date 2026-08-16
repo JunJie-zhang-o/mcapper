@@ -1,12 +1,13 @@
 #pragma once
 
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace flightLogger
 {
@@ -20,14 +21,14 @@ namespace flightLogger
         T data;
     };
 
-    template <typename T, std::size_t N>
+    template <typename T>
     class OverwriteRingBuffer
     {
     public:
-        /// @brief Construct a ring buffer with compile-time capacity.
-        OverwriteRingBuffer()
+        /// @brief Construct a ring buffer with runtime capacity.
+        explicit OverwriteRingBuffer(std::size_t capacity) : data_(capacity)
         {
-            if (N == 0) [[unlikely]]
+            if (capacity == 0) [[unlikely]]
                 throw std::invalid_argument("ring buffer capacity must be greater than zero");
         }
 
@@ -71,9 +72,9 @@ namespace flightLogger
 
         /// @brief Get the fixed storage capacity.
         /// @return Maximum number of elements the buffer can hold.
-        [[nodiscard]] static constexpr std::size_t capacity() noexcept
+        [[nodiscard]] std::size_t capacity() const noexcept
         {
-            return N;
+            return this->data_.size();
         }
 
         /// @brief Check whether the buffer contains no elements.
@@ -87,7 +88,7 @@ namespace flightLogger
         /// @return True when full.
         [[nodiscard]] bool full() const noexcept
         {
-            return this->size_ == N;
+            return this->size_ == this->data_.size();
         }
 
         /// @brief Access stored elements in chronological order as up to two spans.
@@ -96,12 +97,13 @@ namespace flightLogger
         {
             if (this->size_ == 0) return {};
 
-            if (this->size_ < N)
+            if (this->size_ < this->data_.size())
             {
                 return {std::span<const T>{this->data_.data(), this->size_}, {}};
             }
 
-            return {std::span<const T>{this->data_.data() + this->write_, N - this->write_}, std::span<const T>{this->data_.data(), this->write_}};
+            return {std::span<const T>{this->data_.data() + this->write_, this->data_.size() - this->write_},
+                    std::span<const T>{this->data_.data(), this->write_}};
         }
 
     private:
@@ -110,37 +112,35 @@ namespace flightLogger
         {
             ++this->write_;
 
-            if (this->write_ == N) this->write_ = 0;
+            if (this->write_ == this->data_.size()) this->write_ = 0;
 
-            if (this->size_ < N) ++this->size_;
+            if (this->size_ < this->data_.size()) ++this->size_;
         }
 
     private:
-        std::array<T, N> data_{};
-        std::size_t      write_{0};
-        std::size_t      size_{0};
+        std::vector<T> data_;
+        std::size_t    write_{0};
+        std::size_t    size_{0};
     };
 
-    template <typename T, std::size_t N>
+    template <typename T>
     class TripleRingBuffer
     {
     public:
-        /// @brief Special values used by the frozen-state atomic.
-        enum class FrozenState : int
-        {
-            /// @brief 正在转储冻结缓冲区，当前不可复用。
-            Dumping = -2,
-            /// @brief 当前没有已冻结的缓冲区。
-            NoFrozen = -1,
-        };
+        using Ring = OverwriteRingBuffer<T>;
 
-        using Ring = OverwriteRingBuffer<T, N>;
+        TripleRingBuffer(std::size_t pre_capacity, std::size_t post_capacity)
+            : buffers_{Ring{pre_capacity}, Ring{post_capacity}, Ring{pre_capacity}}
+        {
+        }
 
         /// @brief Append a copied value to the active ring buffer.
         /// @param value Value to append.
         void push(const T& value)
         {
-            this->service_freeze_requests();
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (this->active_ == kPostIndex && this->buffers_[this->active_].full()) return;
+
             this->buffers_[this->active_].push(value);
         }
 
@@ -148,20 +148,32 @@ namespace flightLogger
         /// @param value Value to append.
         void push(T&& value)
         {
-            this->service_freeze_requests();
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (this->active_ == kPostIndex && this->buffers_[this->active_].full()) return;
+
             this->buffers_[this->active_].push(std::move(value));
         }
 
-        /// @brief Request that the current active buffer be frozen as pre-trigger data on the next push.
+        /// @brief Freeze the current pre-trigger buffer and switch active writes to the post-trigger buffer.
         void request_freeze_pre() noexcept
         {
-            this->freeze_pre_requested_.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (this->frozen_pre_index_ != kNoFrozen) return;
+
+            this->frozen_pre_index_ = static_cast<int>(this->active_);
+            this->buffers_[kPostIndex].clear();
+            this->active_ = kPostIndex;
         }
 
-        /// @brief Request that the current active buffer be frozen as post-trigger data on the next push.
+        /// @brief Freeze the post-trigger buffer and switch active writes to an available pre-trigger buffer.
         void request_freeze_post() noexcept
         {
-            this->freeze_post_requested_.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (this->frozen_post_index_ != kNoFrozen) return;
+
+            this->frozen_post_index_ = static_cast<int>(kPostIndex);
+            this->active_            = this->next_pre_active_locked();
+            this->buffers_[this->active_].clear();
         }
 
         /// @brief Try to acquire the frozen ring for exclusive dumping.
@@ -170,7 +182,7 @@ namespace flightLogger
         /// @return True if a frozen buffer was acquired.
         bool try_acquire_frozen_pre(std::size_t& index, const Ring*& ring) noexcept
         {
-            return this->try_acquire_frozen(this->frozen_pre_state_, this->frozen_pre_index_, index, ring);
+            return this->try_acquire_frozen(this->frozen_pre_index_, this->pre_dumping_, index, ring);
         }
 
         /// @brief Try to acquire the post-trigger frozen ring for exclusive dumping.
@@ -179,115 +191,81 @@ namespace flightLogger
         /// @return True if a frozen buffer was acquired.
         bool try_acquire_frozen_post(std::size_t& index, const Ring*& ring) noexcept
         {
-            return this->try_acquire_frozen(this->frozen_post_state_, this->frozen_post_index_, index, ring);
+            return this->try_acquire_frozen(this->frozen_post_index_, this->post_dumping_, index, ring);
         }
 
         /// @brief Release a previously acquired pre-trigger frozen ring and mark it reusable.
         /// @param index Index returned by `try_acquire_frozen_pre`.
         void release_frozen_pre(std::size_t index)
         {
-            this->release_frozen(this->frozen_pre_state_, this->frozen_pre_index_, index);
+            this->release_frozen(this->frozen_pre_index_, this->pre_dumping_, index);
         }
 
         /// @brief Release a previously acquired post-trigger frozen ring and mark it reusable.
         /// @param index Index returned by `try_acquire_frozen_post`.
         void release_frozen_post(std::size_t index)
         {
-            this->release_frozen(this->frozen_post_state_, this->frozen_post_index_, index);
+            this->release_frozen(this->frozen_post_index_, this->post_dumping_, index);
+        }
+
+        [[nodiscard]] std::size_t pre_capacity() const noexcept
+        {
+            return this->buffers_[kPreAIndex].capacity();
+        }
+
+        [[nodiscard]] std::size_t post_capacity() const noexcept
+        {
+            return this->buffers_[kPostIndex].capacity();
+        }
+
+        [[nodiscard]] bool post_full() const noexcept
+        {
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            return this->buffers_[kPostIndex].full();
         }
 
     private:
-        bool try_acquire_frozen(std::atomic<int>& state, std::atomic<int>& frozen_index, std::size_t& index, const Ring*& ring) noexcept
+        static constexpr std::size_t kPreAIndex = 0;
+        static constexpr std::size_t kPostIndex = 1;
+        static constexpr std::size_t kPreCIndex = 2;
+        static constexpr int         kNoFrozen  = -1;
+
+        bool try_acquire_frozen(int frozen_index, bool& dumping, std::size_t& index, const Ring*& ring) noexcept
         {
-            int expected = state.load(std::memory_order_acquire);
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (frozen_index == kNoFrozen || dumping) return false;
 
-            if (expected < 0) return false;
-
-            if (!state.compare_exchange_strong(expected, static_cast<int>(FrozenState::Dumping), std::memory_order_acq_rel, std::memory_order_acquire))
-                return false;
-
-            index = static_cast<std::size_t>(expected);
-            frozen_index.store(expected, std::memory_order_release);
-            ring = &this->buffers_[index];
+            dumping = true;
+            index   = static_cast<std::size_t>(frozen_index);
+            ring    = &this->buffers_[index];
             return true;
         }
 
-        void release_frozen(std::atomic<int>& state, std::atomic<int>& frozen_index, std::size_t index)
+        void release_frozen(int& frozen_index, bool& dumping, std::size_t index)
         {
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            if (frozen_index != static_cast<int>(index)) return;
+
             this->buffers_[index].clear();
-            state.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
-            frozen_index.store(static_cast<int>(FrozenState::NoFrozen), std::memory_order_release);
+            frozen_index = kNoFrozen;
+            dumping      = false;
         }
 
-        /// @brief Switch active buffers when a freeze request is pending.
-        void service_freeze_requests()
+        std::size_t next_pre_active_locked() const noexcept
         {
-            if (this->freeze_pre_requested_.exchange(false, std::memory_order_acq_rel))
-            {
-                if (!this->freeze_active_into(this->frozen_pre_state_, this->frozen_pre_index_))
-                    this->freeze_pre_requested_.store(true, std::memory_order_release);
-            }
+            if (this->frozen_pre_index_ != static_cast<int>(kPreAIndex)) return kPreAIndex;
 
-            if (this->freeze_post_requested_.exchange(false, std::memory_order_acq_rel))
-            {
-                if (!this->freeze_active_into(this->frozen_post_state_, this->frozen_post_index_))
-                    this->freeze_post_requested_.store(true, std::memory_order_release);
-            }
-        }
-
-        bool freeze_active_into(std::atomic<int>& state, std::atomic<int>& frozen_index)
-        {
-            if (state.load(std::memory_order_acquire) != static_cast<int>(FrozenState::NoFrozen)) return false;
-
-            std::size_t next_active = 0;
-            if (!this->find_next_active(next_active)) return false;
-
-            const std::size_t old_active = this->active_;
-            this->active_                = next_active;
-
-            frozen_index.store(static_cast<int>(old_active), std::memory_order_release);
-            state.store(static_cast<int>(old_active), std::memory_order_release);
-            return true;
-        }
-
-        bool find_next_active(std::size_t& next_active) const noexcept
-        {
-            for (std::size_t offset = 1; offset < 3; ++offset)
-            {
-                const std::size_t candidate = (this->active_ + offset) % 3;
-
-                if (this->is_available(candidate))
-                {
-                    next_active = candidate;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        bool is_available(std::size_t index) const noexcept
-        {
-            return !this->is_frozen_index(this->frozen_pre_state_, this->frozen_pre_index_, index) &&
-                   !this->is_frozen_index(this->frozen_post_state_, this->frozen_post_index_, index);
-        }
-
-        bool is_frozen_index(const std::atomic<int>& state, const std::atomic<int>& frozen_index, std::size_t index) const noexcept
-        {
-            if (state.load(std::memory_order_acquire) == static_cast<int>(FrozenState::NoFrozen)) return false;
-
-            return frozen_index.load(std::memory_order_acquire) == static_cast<int>(index);
+            return kPreCIndex;
         }
 
     private:
-        Ring              buffers_[3];
-        std::size_t       active_{0};
-        std::atomic<int>  frozen_pre_state_{static_cast<int>(FrozenState::NoFrozen)};
-        std::atomic<int>  frozen_pre_index_{static_cast<int>(FrozenState::NoFrozen)};
-        std::atomic<int>  frozen_post_state_{static_cast<int>(FrozenState::NoFrozen)};
-        std::atomic<int>  frozen_post_index_{static_cast<int>(FrozenState::NoFrozen)};
-        std::atomic<bool> freeze_pre_requested_{false};
-        std::atomic<bool> freeze_post_requested_{false};
+        std::array<Ring, 3> buffers_;
+        std::size_t         active_{kPreAIndex};
+        int                 frozen_pre_index_{kNoFrozen};
+        int                 frozen_post_index_{kNoFrozen};
+        bool                pre_dumping_{false};
+        bool                post_dumping_{false};
+        mutable std::mutex  mutex_;
     };
 
 }  // namespace flightLogger

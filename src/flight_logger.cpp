@@ -35,13 +35,6 @@ namespace flightLogger
             if (!status.ok()) throw std::runtime_error("MCAP writer error: " + status.message);
         }
 
-        uint64_t saturated_add(uint64_t lhs, uint64_t rhs) noexcept
-        {
-            if (std::numeric_limits<uint64_t>::max() - lhs < rhs) return std::numeric_limits<uint64_t>::max();
-
-            return lhs + rhs;
-        }
-
         uint64_t now_steady_ns() noexcept
         {
             using namespace std::chrono;
@@ -355,9 +348,6 @@ namespace flightLogger
         {
             this->set_state(RecorderState::FreezingPreTrigger);
 
-            const uint64_t begin_time = request.trigger_time_ns > this->options_.pre_trigger_ns ? request.trigger_time_ns - this->options_.pre_trigger_ns : 0;
-            const uint64_t end_time   = saturated_add(request.trigger_time_ns, this->options_.post_trigger_ns);
-
             mcap::McapWriterOptions writer_options{this->options_.profile};
             writer_options.library     = this->options_.library;
             writer_options.compression = mcap::Compression::None;
@@ -367,10 +357,10 @@ namespace flightLogger
             throw_if_mcap_error(writer.open(output_path.string(), writer_options));
 
             const auto channel_ids = this->register_mcap_channels(writer);
-            this->write_metadata(writer, request, begin_time, end_time);
+            this->write_metadata(writer, request);
             this->write_attachments(writer, request.trigger_time_ns);
 
-            this->acquire_all(FrozenWindow::PreTrigger, begin_time, request.trigger_time_ns);
+            this->acquire_all(FrozenWindow::PreTrigger);
             this->set_state(RecorderState::Dumping);
             try
             {
@@ -382,40 +372,29 @@ namespace flightLogger
                 throw;
             }
 
-            const uint64_t post_begin =
-                request.trigger_time_ns == std::numeric_limits<uint64_t>::max() ? request.trigger_time_ns : request.trigger_time_ns + 1;
-
-            if (post_begin <= end_time)
+            try
             {
-                this->release_all(FrozenWindow::PreTrigger);
-
                 this->set_state(RecorderState::PostTrigger);
-                std::this_thread::sleep_for(std::chrono::nanoseconds(this->options_.post_trigger_ns));
+                this->wait_for_post_capacity_or_timeout();
 
                 this->set_state(RecorderState::FreezingPostTrigger);
                 for (auto& channel : this->channels_) channel->request_freeze_post();
 
-                this->acquire_all(FrozenWindow::PostTrigger, post_begin, end_time);
+                this->acquire_all(FrozenWindow::PostTrigger);
                 this->set_state(RecorderState::Dumping);
-                try
-                {
-                    this->write_acquired_records(writer, channel_ids);
-                }
-                catch (...)
-                {
-                    this->release_all(FrozenWindow::PostTrigger);
-                    throw;
-                }
+                this->write_acquired_records(writer, channel_ids);
 
                 this->set_state(RecorderState::Finalizing);
                 this->release_all(FrozenWindow::PostTrigger);
             }
-            else
+            catch (...)
             {
-                this->set_state(RecorderState::Finalizing);
+                this->release_all(FrozenWindow::PostTrigger);
                 this->release_all(FrozenWindow::PreTrigger);
+                throw;
             }
 
+            this->release_all(FrozenWindow::PreTrigger);
             writer.close();
             this->set_state(RecorderState::Armed);
         }
@@ -436,7 +415,8 @@ namespace flightLogger
                 metadata["message_encoding"]         = info.message_encoding;
                 metadata["schema_name"]              = info.schema_name;
                 metadata["schema_encoding"]          = info.schema_encoding;
-                metadata["ring_capacity"]            = std::to_string(flight_channel->ring_capacity());
+                metadata["pre_capacity"]             = std::to_string(flight_channel->pre_capacity());
+                metadata["post_capacity"]            = std::to_string(flight_channel->post_capacity());
 
                 mcap::Channel channel{info.topic, info.message_encoding, schema.id, metadata};
                 writer.addChannel(channel);
@@ -464,7 +444,7 @@ namespace flightLogger
             }
         }
 
-        void acquire_all(FrozenWindow window, uint64_t begin_time, uint64_t end_time)
+        void acquire_all(FrozenWindow window)
         {
             std::vector<bool> acquired(this->channels_.size(), false);
             std::size_t       acquired_count = 0;
@@ -475,8 +455,8 @@ namespace flightLogger
                 {
                     if (acquired[i]) continue;
 
-                    const bool channel_acquired = window == FrozenWindow::PreTrigger ? this->channels_[i]->acquire_frozen_pre(begin_time, end_time)
-                                                                                     : this->channels_[i]->acquire_frozen_post(begin_time, end_time);
+                    const bool channel_acquired = window == FrozenWindow::PreTrigger ? this->channels_[i]->acquire_frozen_pre()
+                                                                                     : this->channels_[i]->acquire_frozen_post();
 
                     if (channel_acquired)
                     {
@@ -487,6 +467,29 @@ namespace flightLogger
 
                 if (acquired_count < this->channels_.size()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
+        }
+
+        void wait_for_post_capacity_or_timeout()
+        {
+            const auto timeout = std::chrono::nanoseconds(this->options_.post_trigger_timeout_ns);
+            const auto start   = std::chrono::steady_clock::now();
+
+            while (!this->all_post_buffers_full())
+            {
+                if (std::chrono::steady_clock::now() - start >= timeout) return;
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
+        bool all_post_buffers_full() const
+        {
+            for (const auto& channel : this->channels_)
+            {
+                if (!channel->post_full()) return false;
+            }
+
+            return true;
         }
 
         void write_acquired_records(mcap::McapWriter& writer, const std::unordered_map<uint32_t, mcap::ChannelId>& channel_ids)
@@ -533,7 +536,7 @@ namespace flightLogger
             }
         }
 
-        void write_metadata(mcap::McapWriter& writer, const TriggerRequest& request, uint64_t begin_time, uint64_t end_time)
+        void write_metadata(mcap::McapWriter& writer, const TriggerRequest& request)
         {
             write_metadata_record(writer, "OS_INFO", make_os_info_metadata());
 
@@ -545,15 +548,20 @@ namespace flightLogger
 
             auto recorder_options               = this->options_.mcap_metadata;
             recorder_options["format_version"]  = "1";
-            recorder_options["begin_time_ns"]   = std::to_string(begin_time);
-            recorder_options["end_time_ns"]     = std::to_string(end_time);
-            recorder_options["pre_trigger_ns"]  = std::to_string(this->options_.pre_trigger_ns);
-            recorder_options["post_trigger_ns"] = std::to_string(this->options_.post_trigger_ns);
+            recorder_options["pre_capacity"]    = std::to_string(this->options_.pre_capacity);
+            recorder_options["post_capacity"]   = std::to_string(this->options_.post_capacity);
+            recorder_options["post_trigger_timeout_ns"] = std::to_string(this->options_.post_trigger_timeout_ns);
             recorder_options["output_path"]      = this->options_.output_path;
             recorder_options["output_file_name"] = this->options_.output_file_name;
             recorder_options["profile"]          = this->options_.profile;
             recorder_options["library"]          = this->options_.library;
             recorder_options["channel_count"]    = std::to_string(this->channels_.size());
+            for (const auto& channel : this->channels_)
+            {
+                const auto& topic = channel->info().topic;
+                recorder_options[topic + ".pre_capacity"]  = std::to_string(channel->pre_capacity());
+                recorder_options[topic + ".post_capacity"] = std::to_string(channel->post_capacity());
+            }
             write_metadata_record(writer, "RECORDER_OPTIONS", std::move(recorder_options));
         }
 

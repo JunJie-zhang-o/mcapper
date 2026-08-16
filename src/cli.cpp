@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -38,13 +39,30 @@ namespace flightLogger
             return value;
         }
 
+        std::size_t named_size_or(const rfl::cli::ParsedArgs& args, const std::string& key, std::size_t fallback)
+        {
+            const auto it = args.named.find(key);
+            if (it == args.named.end() || it->second.empty()) return fallback;
+
+            std::size_t       parsed = 0;
+            const auto        value  = std::stoull(it->second, &parsed);
+            constexpr uint64_t max_size = static_cast<uint64_t>(std::numeric_limits<std::size_t>::max());
+            if (parsed != it->second.size() || value == 0 || value > max_size)
+            {
+                throw std::invalid_argument("invalid positive integer value for --" + key + ": " + it->second);
+            }
+
+            return static_cast<std::size_t>(value);
+        }
+
         void reject_unknown_options(const rfl::cli::ParsedArgs& args)
         {
             const std::unordered_set<std::string> allowed{
                 "help",
                 "output",
-                "pre-trigger-sec",
-                "post-trigger-sec",
+                "pre-capacity",
+                "post-capacity",
+                "post-trigger-timeout-sec",
             };
 
             for (const auto& [key, value] : args.named)
@@ -139,8 +157,10 @@ namespace flightLogger
         }
 
         options.sources = parse_source_specs(parsed.positional);
-        options.recorder_options.pre_trigger_ns   = seconds_to_ns(named_double_or(parsed, "pre-trigger-sec", 3.0));
-        options.recorder_options.post_trigger_ns  = seconds_to_ns(named_double_or(parsed, "post-trigger-sec", 1.0));
+        options.recorder_options.pre_capacity  = named_size_or(parsed, "pre-capacity", options.recorder_options.pre_capacity);
+        options.recorder_options.post_capacity = named_size_or(parsed, "post-capacity", options.recorder_options.post_capacity);
+        options.recorder_options.post_trigger_timeout_ns =
+            seconds_to_ns(named_double_or(parsed, "post-trigger-timeout-sec", 1.0));
         apply_output_arg(options.recorder_options, named_or(parsed, "output", "./logs/ros1_dynamic"));
         options.recorder_options.mcap_metadata["source_kind"] = "ros1_dynamic";
 
@@ -155,8 +175,9 @@ namespace flightLogger
         usage += " [options] ros1:/topic [ros1:/topic ...]\n";
         usage += "Options:\n";
         usage += "  --output=PATH/PREFIX        Output path and file prefix, default ./logs/ros1_dynamic\n";
-        usage += "  --pre-trigger-sec=SECONDS   Pre-trigger window, default 3\n";
-        usage += "  --post-trigger-sec=SECONDS  Post-trigger window, default 1\n";
+        usage += "  --pre-capacity=N            Pre-trigger record capacity per topic, default 4096\n";
+        usage += "  --post-capacity=N           Post-trigger record capacity per topic, default 4096\n";
+        usage += "  --post-trigger-timeout-sec=SECONDS  Post-trigger wait timeout, default 1\n";
         return usage;
     }
 

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -28,14 +29,51 @@ namespace flightLogger
 
     struct FlightRecorderOptions
     {
-        uint64_t                                     pre_trigger_ns{0};
-        uint64_t                                     post_trigger_ns{0};
+        std::size_t                                  pre_capacity{4096};
+        std::size_t                                  post_capacity{4096};
+        uint64_t                                     post_trigger_timeout_ns{1'000'000'000ULL};
         std::string                                  output_path{"."};
         std::string                                  output_file_name{"flight_logger"};
         std::string                                  profile{"flight_logger"};
         std::string                                  library{"flight_logger"};
         std::unordered_map<std::string, std::string> mcap_metadata;
     };
+
+    namespace detail
+    {
+        inline std::size_t parse_capacity_metadata(const std::unordered_map<std::string, std::string>& metadata,
+                                                   const std::string&                                  key,
+                                                   std::size_t                                        fallback)
+        {
+            const auto it = metadata.find(key);
+            if (it == metadata.end()) return fallback;
+
+            std::size_t       parsed = 0;
+            const auto        value  = std::stoull(it->second, &parsed);
+            constexpr uint64_t max_size = static_cast<uint64_t>(std::numeric_limits<std::size_t>::max());
+            if (parsed != it->second.size() || value == 0 || value > max_size)
+            {
+                throw std::invalid_argument("invalid positive integer channel metadata value for " + key + ": " + it->second);
+            }
+
+            return static_cast<std::size_t>(value);
+        }
+
+        inline void apply_channel_capacity_metadata(ChannelInfo& info, std::size_t pre_capacity, std::size_t post_capacity)
+        {
+            const auto metadata_pre_capacity  = parse_capacity_metadata(info.metadata, "pre_capacity", pre_capacity);
+            const auto metadata_post_capacity = parse_capacity_metadata(info.metadata, "post_capacity", post_capacity);
+
+            if (metadata_pre_capacity != pre_capacity)
+                throw std::invalid_argument("channel metadata pre_capacity does not match ring pre_capacity");
+
+            if (metadata_post_capacity != post_capacity)
+                throw std::invalid_argument("channel metadata post_capacity does not match ring post_capacity");
+
+            info.metadata["pre_capacity"]  = std::to_string(pre_capacity);
+            info.metadata["post_capacity"] = std::to_string(post_capacity);
+        }
+    }  // namespace detail
 
     class FlightRecorder
     {
@@ -63,7 +101,7 @@ namespace flightLogger
          * 再通过类型擦除接口交给内部 Impl 管理。其它重载最终都会转发到这里。
          *
          * @tparam T           消息类型
-         * @tparam N           环形缓冲容量(编译期常量)
+         * @param  ring        与生产者共享的三缓冲环 TripleRingBuffer
          * @param  info        通道信息(id 字段会被内部覆盖,无需填写)
          * @param  ring        与生产者共享的三缓冲环 TripleRingBuffer
          * @param  serializer  std::unique_ptr<ISerializer<T>>,负责把 T 序列化为字节
@@ -82,15 +120,16 @@ namespace flightLogger
          * info.schema_name      = "MyMsg";
          * // schema_encoding / schema_data 视需要填写
          *
-         * recorder.register_channel<MyMsg, 1024>(
+         * recorder.register_channel<MyMsg>(
          *     std::move(info), ring, std::make_unique<MyProtoSerializer>());
          * @endcode
          */
-        template <typename T, std::size_t N>
-        void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>, N>& ring, typename FlightChannel<T, N>::Serializer serializer)
+        template <typename T>
+        void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>>& ring, typename FlightChannel<T>::Serializer serializer)
         {
             info.id = this->allocate_channel_id();
-            this->register_channel_erased(std::make_unique<FlightChannel<T, N>>(std::move(info), ring, std::move(serializer)));
+            detail::apply_channel_capacity_metadata(info, ring.pre_capacity(), ring.post_capacity());
+            this->register_channel_erased(std::make_unique<FlightChannel<T>>(std::move(info), ring, std::move(serializer)));
         }
 
         /**
@@ -100,7 +139,6 @@ namespace flightLogger
          * 然后转发到 (1) 号重载。适合“临时写一个编码函数”的场景,免去派生一个类。
          *
          * @tparam T           消息类型
-         * @tparam N           环形缓冲容量
          * @param  info        通道信息(id 字段无需填写)
          * @param  ring        三缓冲环
          * @param  serializer  形如 `SerializedPayload(const T&)` 的可调用对象
@@ -111,7 +149,7 @@ namespace flightLogger
          * info.message_encoding = "raw";
          * info.schema_name      = "uint64";
          *
-         * recorder.register_channel<uint64_t, 256>(
+         * recorder.register_channel<uint64_t>(
          *     std::move(info), ring,
          *     [](const uint64_t& v) -> flightLogger::SerializedPayload {
          *         flightLogger::SerializedPayload out(sizeof(v));
@@ -120,10 +158,10 @@ namespace flightLogger
          *     });
          * @endcode
          */
-        template <typename T, std::size_t N>
-        void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>, N>& ring, typename FunctionSerializer<T>::Function serializer)
+        template <typename T>
+        void register_channel(ChannelInfo info, TripleRingBuffer<TimedRecord<T>>& ring, typename FunctionSerializer<T>::Function serializer)
         {
-            this->register_channel<T, N>(std::move(info), ring, std::make_unique<FunctionSerializer<T>>(std::move(serializer)));
+            this->register_channel<T>(std::move(info), ring, std::make_unique<FunctionSerializer<T>>(std::move(serializer)));
         }
 
         /**
@@ -131,9 +169,9 @@ namespace flightLogger
          *
          * 适合 ROS1 / ROS2 / struct 等需要调用方显式选择 codec 或提供 schema 的场景。
          */
-        template <typename T, std::size_t N, typename Codec, typename = std::enable_if_t<std::is_base_of_v<ICodec<T>, Codec>>>
+        template <typename T, typename Codec, typename = std::enable_if_t<std::is_base_of_v<ICodec<T>, Codec>>>
         void register_channel(std::string topic,
-                              TripleRingBuffer<TimedRecord<T>, N>& ring,
+                              TripleRingBuffer<TimedRecord<T>>& ring,
                               std::unique_ptr<Codec> codec,
                               std::unordered_map<std::string, std::string> metadata = {})
         {
@@ -150,7 +188,7 @@ namespace flightLogger
             info.metadata          = std::move(metadata);
             info.metadata["topic"] = info.topic;
 
-            this->register_channel<T, N>(std::move(info), ring, std::move(codec));
+            this->register_channel<T>(std::move(info), ring, std::move(codec));
         }
 
         /**
@@ -165,7 +203,6 @@ namespace flightLogger
          * 这是最常用、最推荐的入口——调用方无需关心 schema 生成、无需手写序列化函数。
          *
          * @tparam T         消息类型(必须被对应 codec 支持,例如 JSON 需可反射)
-         * @tparam N         环形缓冲容量
          * @param  topic     MCAP 中的 topic 名(例如 "/imu/data")
          * @param  ring      三缓冲环
          * @param  encoding  期望的消息编码格式(JSON / CBOR / MsgPack / ...)
@@ -173,15 +210,15 @@ namespace flightLogger
          * @code
          * struct ImuData { double ax, ay, az; uint64_t stamp; };
          *
-         * flightLogger::TripleRingBuffer<flightLogger::TimedRecord<ImuData>, 1024> ring;
+         * flightLogger::TripleRingBuffer<flightLogger::TimedRecord<ImuData>> ring{1024, 256};
          *
-         * recorder.register_channel<ImuData, 1024>(
+         * recorder.register_channel<ImuData>(
          *     "/imu/data", ring, flightLogger::MessageEncoding::Json);
          * @endcode
          */
-        template <typename T, std::size_t N>
+        template <typename T>
         void register_channel(std::string topic,
-                              TripleRingBuffer<TimedRecord<T>, N>& ring,
+                              TripleRingBuffer<TimedRecord<T>>& ring,
                               MessageEncoding encoding,
                               std::unordered_map<std::string, std::string> metadata = {})
         {
@@ -199,7 +236,7 @@ namespace flightLogger
             info.metadata          = std::move(metadata);
             info.metadata["topic"] = info.topic;
 
-            this->register_channel<Value, N>(std::move(info), ring, std::move(codec));
+            this->register_channel<Value>(std::move(info), ring, std::move(codec));
         }
 
         void start();

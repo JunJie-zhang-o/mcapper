@@ -6,6 +6,7 @@
 
 #if FLIGHTLOGGER_ENABLE_ROS1
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -40,18 +41,17 @@ namespace flightLogger
     uint64_t ros1_now_ns();
     SerializedPayload serialize_raw_ros1_message(const topic_tools::ShapeShifter& message);
 
-    template <std::size_t N>
     class Ros1TopicBridge
     {
     public:
-        Ros1TopicBridge(ros::NodeHandle& node, FlightRecorder& recorder, std::vector<std::string> topics)
-            : node_(node), recorder_(recorder)
+        Ros1TopicBridge(ros::NodeHandle& node, FlightRecorder& recorder, std::vector<std::string> topics, std::size_t pre_capacity, std::size_t post_capacity)
+            : node_(node), recorder_(recorder), pre_capacity_(pre_capacity), post_capacity_(post_capacity)
         {
             this->topics_.reserve(topics.size());
             for (auto& topic : topics)
             {
                 if (topic.empty()) throw std::invalid_argument("ros1 topic is empty");
-                this->topics_.push_back(std::make_unique<TopicState>(std::move(topic)));
+                this->topics_.push_back(std::make_unique<TopicState>(std::move(topic), this->pre_capacity_, this->post_capacity_));
             }
         }
 
@@ -99,12 +99,13 @@ namespace flightLogger
     private:
         struct TopicState
         {
-            explicit TopicState(std::string topic_name) : topic(std::move(topic_name))
+            TopicState(std::string topic_name, std::size_t pre_capacity, std::size_t post_capacity)
+                : topic(std::move(topic_name)), ring(pre_capacity, post_capacity)
             {
             }
 
             std::string topic;
-            TripleRingBuffer<TimedRecord<RawRos1Message>, N> ring;
+            TripleRingBuffer<TimedRecord<RawRos1Message>> ring;
             ros::Subscriber subscriber;
             bool registered{false};
             bool registration_failed{false};
@@ -129,10 +130,12 @@ namespace flightLogger
                 info.schema_data       = detail::ros1_schema_data(message->getMessageDefinition());
                 info.metadata["topic"] = state.topic;
                 info.metadata["md5sum"] = message->getMD5Sum();
+                info.metadata["pre_capacity"]  = std::to_string(this->pre_capacity_);
+                info.metadata["post_capacity"] = std::to_string(this->post_capacity_);
 
                 try
                 {
-                    this->recorder_.register_channel<RawRos1Message, N>(
+                    this->recorder_.register_channel<RawRos1Message>(
                         std::move(info),
                         state.ring,
                         std::make_unique<RawRos1MessageSerializer>());
@@ -153,6 +156,8 @@ namespace flightLogger
 
         ros::NodeHandle&                         node_;
         FlightRecorder&                          recorder_;
+        std::size_t                              pre_capacity_;
+        std::size_t                              post_capacity_;
         std::vector<std::unique_ptr<TopicState>> topics_;
         mutable std::mutex                       mutex_;
     };

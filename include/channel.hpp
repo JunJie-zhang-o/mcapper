@@ -34,12 +34,14 @@ namespace flightLogger
 
         virtual uint32_t           id() const noexcept            = 0;
         virtual const ChannelInfo& info() const noexcept          = 0;
-        virtual std::size_t        ring_capacity() const noexcept = 0;
+        virtual std::size_t        pre_capacity() const noexcept  = 0;
+        virtual std::size_t        post_capacity() const noexcept = 0;
+        virtual bool               post_full() const noexcept     = 0;
 
         virtual void request_freeze_pre() noexcept                                      = 0;
         virtual void request_freeze_post() noexcept                                     = 0;
-        virtual bool acquire_frozen_pre(uint64_t begin_time, uint64_t end_time)         = 0;
-        virtual bool acquire_frozen_post(uint64_t begin_time, uint64_t end_time)        = 0;
+        virtual bool acquire_frozen_pre()                                               = 0;
+        virtual bool acquire_frozen_post()                                              = 0;
         virtual void release_frozen_pre() noexcept                                      = 0;
         virtual void release_frozen_post() noexcept                                     = 0;
 
@@ -49,7 +51,7 @@ namespace flightLogger
         virtual void              advance() noexcept                 = 0;
     };
 
-    template <typename T, std::size_t N>
+    template <typename T>
     class FlightChannel final : public IFlightChannel
     {
     private:
@@ -62,7 +64,7 @@ namespace flightLogger
 
     public:
         using Record     = TimedRecord<T>;
-        using TripleRing = TripleRingBuffer<Record, N>;
+        using TripleRing = TripleRingBuffer<Record>;
         using Ring       = typename TripleRing::Ring;
         using Serializer = std::unique_ptr<ISerializer<T>>;
 
@@ -81,9 +83,19 @@ namespace flightLogger
             return this->info_;
         }
 
-        std::size_t ring_capacity() const noexcept override
+        std::size_t pre_capacity() const noexcept override
         {
-            return N;
+            return this->ring_.pre_capacity();
+        }
+
+        std::size_t post_capacity() const noexcept override
+        {
+            return this->ring_.post_capacity();
+        }
+
+        bool post_full() const noexcept override
+        {
+            return this->ring_.post_full();
         }
 
         void request_freeze_pre() noexcept override
@@ -96,14 +108,14 @@ namespace flightLogger
             this->ring_.request_freeze_post();
         }
 
-        bool acquire_frozen_pre(uint64_t begin_time, uint64_t end_time) override
+        bool acquire_frozen_pre() override
         {
-            return this->acquire_frozen(begin_time, end_time, FreezeKind::Pre);
+            return this->acquire_frozen(FreezeKind::Pre);
         }
 
-        bool acquire_frozen_post(uint64_t begin_time, uint64_t end_time) override
+        bool acquire_frozen_post() override
         {
-            return this->acquire_frozen(begin_time, end_time, FreezeKind::Post);
+            return this->acquire_frozen(FreezeKind::Post);
         }
 
         void release_frozen_pre() noexcept override
@@ -137,7 +149,7 @@ namespace flightLogger
         }
 
     private:
-        bool acquire_frozen(uint64_t begin_time, uint64_t end_time, FreezeKind kind)
+        bool acquire_frozen(FreezeKind kind)
         {
             std::size_t index = 0;
             const Ring* ring  = nullptr;
@@ -155,20 +167,17 @@ namespace flightLogger
             this->records_.clear();
             this->cursor_ = 0;
 
-            const auto append_in_window = [this, begin_time, end_time](std::span<const Record> records)
+            const auto append_records = [this](std::span<const Record> records)
             {
                 for (const auto& record : records)
                 {
-                    if (record.timestamp_ns >= begin_time && record.timestamp_ns <= end_time)
-                    {
-                        this->records_.push_back(&record);
-                    }
+                    this->records_.push_back(&record);
                 }
             };
 
             const auto segments = this->frozen_ring_->chronological_segments();
-            append_in_window(segments.first);
-            append_in_window(segments.second);
+            append_records(segments.first);
+            append_records(segments.second);
 
             return true;
         }
