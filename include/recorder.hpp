@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -205,6 +206,10 @@ namespace flightLogger
 
         RecorderState state() const noexcept;
 
+        void add_attachment(std::filesystem::path path, std::string name = {});
+        void add_attachment(const std::string& path, std::string name = {});
+        void add_attachment(const char* path, std::string name = {});
+
         void trigger(std::string reason);
         void trigger(uint64_t trigger_time_ns, std::string reason = {});
 
@@ -215,6 +220,7 @@ namespace flightLogger
 
         uint32_t allocate_channel_id();
         void     register_channel_erased(std::unique_ptr<IFlightChannel> channel);
+        void     add_attachment_path(std::filesystem::path path, std::string name);
 
     private:
         std::unique_ptr<Impl> impl_;

@@ -1,7 +1,9 @@
 #define MCAP_IMPLEMENTATION
 
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <ctime>
 #include <exception>
 #include <filesystem>
@@ -112,11 +114,65 @@ namespace flightLogger
             throw_if_mcap_error(writer.write(metadata));
         }
 
+        std::string media_type_for_path(const std::filesystem::path& path)
+        {
+            auto extension = path.extension().string();
+            for (char& ch : extension) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            switch (extension.size())
+            {
+                case 4:
+                    if (extension == ".txt" || extension == ".log") return "text/plain";
+                    if (extension == ".yml") return "application/yaml";
+                    if (extension == ".xml") return "application/xml";
+                    if (extension == ".png") return "image/png";
+                    if (extension == ".jpg") return "image/jpeg";
+                    if (extension == ".pdf") return "application/pdf";
+                    break;
+                case 5:
+                    if (extension == ".json") return "application/json";
+                    if (extension == ".yaml") return "application/yaml";
+                    if (extension == ".urdf") return "application/xml";
+                    if (extension == ".jpeg") return "image/jpeg";
+                    break;
+                default:
+                    break;
+            }
+
+            return "application/octet-stream";
+        }
+
+        std::vector<std::byte> read_attachment_data(const std::filesystem::path& path)
+        {
+            std::ifstream input{path, std::ios::binary | std::ios::ate};
+            if (!input) throw std::runtime_error("cannot open attachment file: " + path.string());
+
+            const auto end_position = input.tellg();
+            if (end_position == std::streampos{-1}) throw std::runtime_error("cannot stat attachment file: " + path.string());
+
+            std::vector<std::byte> data(static_cast<std::size_t>(end_position));
+            input.seekg(0);
+
+            if (!data.empty())
+            {
+                input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+                if (!input) throw std::runtime_error("cannot read attachment file: " + path.string());
+            }
+
+            return data;
+        }
+
     }  // namespace
 
     class FlightRecorder::Impl
     {
     public:
+        struct AttachmentInfo
+        {
+            std::filesystem::path path;
+            std::string           name;
+        };
+
         explicit Impl(FlightRecorderOptions options) : options_(std::move(options))
         {
             this->start_worker();
@@ -143,6 +199,17 @@ namespace flightLogger
             this->throw_if_registration_closed_locked();
 
             this->channels_.push_back(std::move(channel));
+        }
+
+        void add_attachment(std::filesystem::path path, std::string name)
+        {
+            std::lock_guard<std::mutex> lock(this->mutex_);
+
+            this->throw_if_registration_closed_locked();
+
+            if (name.empty()) name = path.filename().string();
+
+            this->attachments_.push_back(AttachmentInfo{std::move(path), std::move(name)});
         }
 
         void start()
@@ -301,6 +368,7 @@ namespace flightLogger
 
             const auto channel_ids = this->register_mcap_channels(writer);
             this->write_metadata(writer, request, begin_time, end_time);
+            this->write_attachments(writer, request.trigger_time_ns);
 
             this->acquire_all(FrozenWindow::PreTrigger, begin_time, request.trigger_time_ns);
             this->set_state(RecorderState::Dumping);
@@ -376,6 +444,24 @@ namespace flightLogger
             }
 
             return channel_ids;
+        }
+
+        void write_attachments(mcap::McapWriter& writer, uint64_t timestamp)
+        {
+            for (const auto& info : this->attachments_)
+            {
+                const auto data = read_attachment_data(info.path);
+
+                mcap::Attachment attachment;
+                attachment.logTime    = timestamp;
+                attachment.createTime = timestamp;
+                attachment.name       = info.name;
+                attachment.mediaType  = media_type_for_path(info.path);
+                attachment.dataSize   = data.size();
+                attachment.data       = data.data();
+
+                throw_if_mcap_error(writer.write(attachment));
+            }
         }
 
         void acquire_all(FrozenWindow window, uint64_t begin_time, uint64_t end_time)
@@ -505,6 +591,7 @@ namespace flightLogger
     private:
         FlightRecorderOptions                        options_;
         std::vector<std::unique_ptr<IFlightChannel>> channels_;
+        std::vector<AttachmentInfo>                  attachments_;
         uint32_t                                     next_channel_id_{1};
 
         mutable std::mutex            mutex_;
@@ -533,6 +620,21 @@ namespace flightLogger
         return this->impl_->state();
     }
 
+    void FlightRecorder::add_attachment(std::filesystem::path path, std::string name)
+    {
+        this->add_attachment_path(std::move(path), std::move(name));
+    }
+
+    void FlightRecorder::add_attachment(const std::string& path, std::string name)
+    {
+        this->add_attachment_path(std::filesystem::path{path}, std::move(name));
+    }
+
+    void FlightRecorder::add_attachment(const char* path, std::string name)
+    {
+        this->add_attachment_path(std::filesystem::path{path}, std::move(name));
+    }
+
     void FlightRecorder::trigger(uint64_t trigger_time_ns, std::string reason)
     {
         this->impl_->trigger(trigger_time_ns, std::move(reason));
@@ -556,6 +658,11 @@ namespace flightLogger
     void FlightRecorder::register_channel_erased(std::unique_ptr<IFlightChannel> channel)
     {
         this->impl_->register_channel(std::move(channel));
+    }
+
+    void FlightRecorder::add_attachment_path(std::filesystem::path path, std::string name)
+    {
+        this->impl_->add_attachment(std::move(path), std::move(name));
     }
 
 }  // namespace flightLogger

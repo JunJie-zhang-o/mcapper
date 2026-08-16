@@ -40,7 +40,7 @@ Perf:
       chmod +x mcap
       sudo mv mcap /usr/local/bin/
 
-    ☐ 支持Attachment 放置配置的读取信息
+    ✔ 支持Attachment 放置配置的读取信息 @done(26-08-16 19:26)
 
     ☐ 配置(这种只支持通信的方式)
         ☐ 应该可以配置记录的话题和触发的话题等
