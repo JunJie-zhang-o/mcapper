@@ -14,7 +14,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(FLIGHTLOGGER_BUILD_EXAMPLES "Build flight logger examples" ON)
 option(FLIGHTLOGGER_BUILD_TESTS "Build flight logger tests" ON)
 option(FLIGHTLOGGER_ENABLE_MSGPACK "Enable reflect-cpp MsgPack support" OFF)
-option(FLIGHTLOGGER_ENABLE_ROS1 "Enable ROS1 codec support" OFF)
+set(FLIGHTLOGGER_ENABLE_ROS1_DEFAULT OFF)
+if("$ENV{ROS_VERSION}" STREQUAL "1")
+    set(FLIGHTLOGGER_ENABLE_ROS1_DEFAULT ON)
+endif()
+option(FLIGHTLOGGER_ENABLE_ROS1 "Enable ROS1 codec support" ${FLIGHTLOGGER_ENABLE_ROS1_DEFAULT})
 option(FLIGHTLOGGER_ENABLE_ROS2 "Enable ROS2 codec support" OFF)
 option(FLIGHTLOGGER_STATIC_RUNTIME "Link libstdc++ and libgcc statically when using GCC" ON)
 # Version check disabled for testing purposes
@@ -166,7 +170,7 @@ if(FLIGHTLOGGER_ENABLE_ROS2)
         ament_index_cpp::ament_index_cpp)
 endif()
 
-if(FLIGHTLOGGER_ENABLE_ROS1)
+if(FLIGHTLOGGER_ENABLE_ROS1 AND FLIGHTLOGGER_BUILD_TESTS)
     find_package(GTest REQUIRED)
     add_executable(ros1_message_definition_test tests/ros1_message_definition_test.cpp)
     target_link_libraries(ros1_message_definition_test
@@ -174,7 +178,9 @@ if(FLIGHTLOGGER_ENABLE_ROS1)
         flight_logger
         GTest::GTest
         GTest::Main)
+endif()
 
+if(FLIGHTLOGGER_ENABLE_ROS1)
     add_executable(ros1_dynamic_recorder
         apps/ros1_dynamic_recorder.cpp
         apps/ros1/cli.cpp)
@@ -294,6 +300,7 @@ install(FILES
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_PACKAGE_NAME "mcapper")
 set(CPACK_PACKAGE_VERSION "${PACKAGE_VERSION}")
+set(CPACK_SET_DESTDIR ON)
 include(CPack)
 
 if(FLIGHTLOGGER_ENABLE_ROS2)
