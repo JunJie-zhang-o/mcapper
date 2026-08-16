@@ -178,8 +178,7 @@ int main()
         for (const auto& [name, data] : contents) write_file(input_dir / name, data);
 
         FlightRecorderOptions options;
-        options.output_path      = output_dir.string();
-        options.output_file_name = "attachments";
+        options.output_path = (output_dir / "attachments").string();
 
         FlightRecorder recorder{options};
         recorder.add_attachment(input_dir / "config.JSON");

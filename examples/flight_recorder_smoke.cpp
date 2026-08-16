@@ -4,13 +4,13 @@
  * @brief 持续推送 IMU 数据的示例程序。
  *
  * 程序启动后创建一个 C++20 std::jthread，在后台模拟 1 kHz 的 IMU 采样，
- * 以当前时钟纳秒戳为时间戳持续向 TripleRingBuffer 推送数据。
+ * 以当前时钟纳秒戳为时间戳持续向 BlackBox 推送数据。
  *
  * 当收到 SIGINT / SIGTERM 信号时，程序会立即调用 FlightRecorder::trigger()
  * 触发 mcap 转储，等待写入完成后正常退出。生成的 .mcap 文件保存在
  * ./logs/ 目录下。
  *
- * @note TripleRingBuffer 的 freeze（pre/post）只在 push() 内部的
+ * @note BlackBox 的 freeze（pre/post）只在 push() 内部的
  *       service_freeze_requests() 中才真正发生（切换 active buffer）。
  *       因此后台采样线程会一直运行到 FlightRecorder::stop() 写完文件之后。
  */
@@ -79,18 +79,16 @@ int main()
     std::signal(SIGTERM, signal_handler);
 
     // ── 3. 初始化 ring buffer ────────────────────────────────────────────────
-    // 容量 4096，约 4 秒的 1 kHz 数据（可根据 pre_trigger_ns 调整）
-    constexpr std::size_t kRingSize = 4096;
-    TripleRingBuffer<TimedRecord<ImuSample>, kRingSize> imu_ring;
+    constexpr std::size_t kPreCapacity  = 3000;
+    constexpr std::size_t kPostCapacity = 1000;
+    BlackBox<TimedRecord<ImuSample>> imu_ring{kPreCapacity, kPostCapacity};
 
     // ── 4. 配置 FlightRecorder ───────────────────────────────────────────────
-    constexpr uint64_t kSecond = 1'000'000'000ULL;
-
     FlightRecorderOptions options;
-    options.pre_trigger_ns         = 3 * kSecond;   // 保存触发前 3 s
-    options.post_trigger_ns        = 1 * kSecond;   // 继续采集触发后 1 s
-    options.output_path            = log_dir.string();
-    options.output_file_name       = "imu_smoke";
+    options.pre_capacity           = kPreCapacity;
+    options.post_capacity          = kPostCapacity;
+    options.post_trigger_timeout_ms = 1000;
+    options.output_path            = (log_dir / "imu_smoke").string();
     options.mcap_metadata["robot"] = "smoke_robot";
     options.mcap_metadata["note"]  = "signal-triggered recording";
 

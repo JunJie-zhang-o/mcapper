@@ -14,9 +14,16 @@ option(FLIGHTLOGGER_BUILD_TESTS "Build flight logger tests" ON)
 option(FLIGHTLOGGER_ENABLE_MSGPACK "Enable reflect-cpp MsgPack support" OFF)
 option(FLIGHTLOGGER_ENABLE_ROS1 "Enable ROS1 codec support" OFF)
 option(FLIGHTLOGGER_ENABLE_ROS2 "Enable ROS2 codec support" OFF)
+option(FLIGHTLOGGER_STATIC_RUNTIME "Link libstdc++ and libgcc statically when using GCC" ON)
 # Version check disabled for testing purposes
 # (original checks removed)
 # (no version check required)
+
+add_compile_options(
+    "$<$<COMPILE_LANGUAGE:C>:-g>"
+    "$<$<COMPILE_LANGUAGE:C>:-O2>"
+    "$<$<COMPILE_LANGUAGE:CXX>:-g>"
+    "$<$<COMPILE_LANGUAGE:CXX>:-O2>")
 
 find_package(Threads REQUIRED)
 
@@ -29,10 +36,13 @@ set(REFLECT_CPP_YYJSON_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/src/yyjson.c)
 
 add_library(flight_logger STATIC
-    src/cli.cpp
+    src/bridge/ros1/config.cpp
     src/flight_logger.cpp)
 
-target_compile_features(flight_logger PUBLIC cxx_std_20)
+set_target_properties(flight_logger PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
+
+target_compile_features(flight_logger PRIVATE cxx_std_20)
 
 target_include_directories(flight_logger
     PUBLIC
@@ -40,6 +50,7 @@ target_include_directories(flight_logger
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty
     PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mcap/include)
 
 target_compile_definitions(flight_logger
@@ -55,6 +66,9 @@ add_library(flight_logger_rfl_deps STATIC
     ${REFLECT_CPP_CORE_SOURCE}
     ${REFLECT_CPP_JSON_SOURCE}
     ${REFLECT_CPP_YYJSON_SOURCE})
+
+set_target_properties(flight_logger_rfl_deps PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
 
 target_compile_features(flight_logger_rfl_deps PUBLIC cxx_std_20)
 
@@ -77,8 +91,8 @@ target_link_libraries(flight_logger_rfl
     flight_logger_rfl_deps)
 
 if(FLIGHTLOGGER_STATIC_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_options(flight_logger_rfl
-        INTERFACE
+    target_link_options(flight_logger
+        PUBLIC
         -static-libstdc++
         -static-libgcc)
 endif()
@@ -146,6 +160,19 @@ if(FLIGHTLOGGER_ENABLE_ROS1)
         flight_logger
         GTest::GTest
         GTest::Main)
+
+    add_executable(ros1_dynamic_recorder
+        apps/ros1_dynamic_recorder.cpp
+        apps/ros1/cli.cpp)
+
+    target_include_directories(ros1_dynamic_recorder
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/apps
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+    target_link_libraries(ros1_dynamic_recorder
+        PRIVATE
+        flight_logger)
 endif()
 
 if(FLIGHTLOGGER_BUILD_EXAMPLES)
@@ -156,21 +183,19 @@ if(FLIGHTLOGGER_BUILD_EXAMPLES)
         PRIVATE
         flight_logger_rfl)
 
-    if(FLIGHTLOGGER_ENABLE_ROS1)
-        add_executable(ros1_dynamic_recorder
-            examples/ros1_dynamic_recorder.cpp)
-
-        target_link_libraries(ros1_dynamic_recorder
-            PRIVATE
-            flight_logger)
-    endif()
 endif()
 
 if(FLIGHTLOGGER_BUILD_TESTS)
     enable_testing()
 
     add_executable(flight_logger_source_spec_test
-        tests/source_spec_test.cpp)
+        tests/source_spec_test.cpp
+        apps/ros1/cli.cpp)
+
+    target_include_directories(flight_logger_source_spec_test
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/apps
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
     target_link_libraries(flight_logger_source_spec_test
         PRIVATE
@@ -178,6 +203,26 @@ if(FLIGHTLOGGER_BUILD_TESTS)
 
     add_test(NAME flight_logger_source_spec_test
         COMMAND flight_logger_source_spec_test)
+
+    add_executable(flight_logger_ringbuffer_test
+        tests/ringbuffer_test.cpp)
+
+    target_link_libraries(flight_logger_ringbuffer_test
+        PRIVATE
+        flight_logger)
+
+    add_test(NAME flight_logger_ringbuffer_test
+        COMMAND flight_logger_ringbuffer_test)
+
+    add_executable(flight_logger_recorder_capacity_test
+        tests/recorder_capacity_test.cpp)
+
+    target_link_libraries(flight_logger_recorder_capacity_test
+        PRIVATE
+        flight_logger)
+
+    add_test(NAME flight_logger_recorder_capacity_test
+        COMMAND flight_logger_recorder_capacity_test)
 
     add_executable(flight_logger_attachment_test
         tests/attachment_test.cpp)
