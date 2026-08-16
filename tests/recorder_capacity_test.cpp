@@ -1,4 +1,5 @@
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -196,6 +197,29 @@ namespace
         return mcaps.front();
     }
 
+    std::vector<std::filesystem::path> find_mcaps(const std::filesystem::path& output_dir)
+    {
+        std::vector<std::filesystem::path> mcaps;
+        for (const auto& entry : std::filesystem::directory_iterator{output_dir})
+        {
+            if (entry.path().extension() == ".mcap") mcaps.push_back(entry.path());
+        }
+
+        std::sort(mcaps.begin(), mcaps.end());
+        return mcaps;
+    }
+
+    void wait_until_armed(flightLogger::FlightRecorder& recorder)
+    {
+        for (std::size_t i = 0; i < 2000; ++i)
+        {
+            if (recorder.state() == flightLogger::RecorderState::Armed) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        fail("recorder did not return to armed state");
+    }
+
     flightLogger::ChannelInfo sample_channel_info()
     {
         flightLogger::ChannelInfo info;
@@ -283,6 +307,49 @@ namespace
 
         std::filesystem::remove_all(output_dir);
     }
+
+    void records_multiple_trigger_cycles()
+    {
+        const auto output_dir = make_output_dir("multi_trigger");
+
+        flightLogger::FlightRecorderOptions options;
+        options.output_path             = (output_dir / "multi").string();
+        options.pre_capacity            = 2;
+        options.post_capacity           = 2;
+        options.post_trigger_timeout_ms = 20;
+
+        flightLogger::BlackBox<flightLogger::TimedRecord<Sample>> ring{2, 2};
+        flightLogger::FlightRecorder recorder{options};
+        recorder.register_channel<Sample>(sample_channel_info(), ring, serialize_sample);
+
+        push_sample(ring, 10, 1);
+        push_sample(ring, 20, 2);
+        push_sample(ring, 30, 3);
+        recorder.trigger(35, "first");
+        push_sample(ring, 40, 4);
+        wait_until_armed(recorder);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+        push_sample(ring, 100, 10);
+        push_sample(ring, 110, 11);
+        push_sample(ring, 120, 12);
+        recorder.trigger(125, "second");
+        push_sample(ring, 130, 13);
+        wait_until_armed(recorder);
+        recorder.stop();
+
+        const auto mcaps = find_mcaps(output_dir);
+        expect(mcaps.size() == 2, "expected two mcap files from two trigger cycles");
+
+        const auto first = parse_mcap(mcaps[0]);
+        expect(first.message_times == std::vector<uint64_t>({20, 30, 40}), "unexpected first trigger timestamps");
+
+        const auto second = parse_mcap(mcaps[1]);
+        expect(second.message_times == std::vector<uint64_t>({110, 120, 130}), "unexpected second trigger timestamps");
+
+        std::filesystem::remove_all(output_dir);
+    }
 }  // namespace
 
 int main()
@@ -291,6 +358,7 @@ int main()
     {
         records_pre_tail_and_first_post_capacity();
         timeout_flushes_partial_post_capacity();
+        records_multiple_trigger_cycles();
     }
     catch (const std::exception& error)
     {

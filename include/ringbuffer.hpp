@@ -233,6 +233,7 @@ namespace flightLogger
             this->frozen_post_index_ = static_cast<int>(kPostIndex);
             this->active_            = this->next_pre_active_locked();
             this->buffers_[this->active_].clear();
+            this->first_record_time_ns_.reset();
         }
 
         /// @brief Try to acquire the frozen ring for exclusive dumping.

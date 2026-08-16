@@ -392,6 +392,7 @@ namespace flightLogger
             try
             {
                 this->write_acquired_records(writer, channel_ids);
+                this->release_all(FrozenWindow::PreTrigger);
             }
             catch (...)
             {
@@ -421,7 +422,6 @@ namespace flightLogger
                 throw;
             }
 
-            this->release_all(FrozenWindow::PreTrigger);
             writer.close();
             this->set_state(RecorderState::Armed);
         }

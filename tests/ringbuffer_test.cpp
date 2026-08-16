@@ -78,6 +78,25 @@ namespace
         expect(ring.pre_capacity() == 2, "unexpected pre capacity");
         expect(ring.post_capacity() == 3, "unexpected post capacity");
     }
+
+    void blackbox_refreshes_first_record_time_after_trigger_cycle()
+    {
+        flightLogger::BlackBox<flightLogger::TimedRecord<int>> ring{2, 2};
+
+        ring.push(flightLogger::TimedRecord<int>{10, 1});
+        ring.push(flightLogger::TimedRecord<int>{20, 2});
+        expect(ring.first_record_time_ns().has_value(), "missing initial first record time");
+        expect(*ring.first_record_time_ns() == 10, "unexpected initial first record time");
+
+        ring.request_freeze_pre();
+        ring.push(flightLogger::TimedRecord<int>{30, 3});
+        ring.request_freeze_post();
+        expect(!ring.first_record_time_ns().has_value(), "first record time was not reset for next cycle");
+
+        ring.push(flightLogger::TimedRecord<int>{40, 4});
+        expect(ring.first_record_time_ns().has_value(), "missing refreshed first record time");
+        expect(*ring.first_record_time_ns() == 40, "unexpected refreshed first record time");
+    }
 }  // namespace
 
 int main()
@@ -86,6 +105,7 @@ int main()
     {
         overwrite_ring_uses_runtime_capacity();
         blackbox_uses_pre_and_post_capacities();
+        blackbox_refreshes_first_record_time_after_trigger_cycle();
     }
     catch (const std::exception& error)
     {
