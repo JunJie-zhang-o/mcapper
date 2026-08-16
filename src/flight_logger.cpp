@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
-#include <limits>
 #include <mcap/writer.hpp>
 #include <mutex>
 #include <optional>
@@ -27,6 +26,26 @@
 
 namespace flightLogger
 {
+    void FlightRecorderOptions::validate() const
+    {
+        if (pre_capacity == 0)
+        {
+            throw std::invalid_argument("invalid positive integer value for recorder pre_capacity");
+        }
+        if (post_capacity == 0)
+        {
+            throw std::invalid_argument("invalid positive integer value for recorder post_capacity");
+        }
+        if (output_path.empty())
+        {
+            throw std::invalid_argument("recorder output_path is empty");
+        }
+        if (!std::filesystem::path{output_path}.has_filename())
+        {
+            throw std::invalid_argument("recorder output_path must include a file prefix");
+        }
+    }
+
     namespace
     {
 
@@ -176,6 +195,7 @@ namespace flightLogger
 
         explicit Impl(FlightRecorderOptions options) : options_(std::move(options))
         {
+            this->options_.validate();
             this->start_worker();
         }
 
@@ -356,8 +376,7 @@ namespace flightLogger
         {
             this->set_state(RecorderState::FreezingPreTrigger);
 
-            mcap::McapWriterOptions writer_options{this->options_.profile};
-            writer_options.library     = this->options_.library;
+            mcap::McapWriterOptions writer_options{"flight_logger"};
             writer_options.compression = mcap::Compression::None;
 
             mcap::McapWriter writer;
@@ -479,7 +498,7 @@ namespace flightLogger
 
         void wait_for_post_capacity_or_timeout()
         {
-            const auto timeout = std::chrono::nanoseconds(this->options_.post_trigger_timeout_ns);
+            const auto timeout = std::chrono::milliseconds(this->options_.post_trigger_timeout_ms);
             const auto start   = std::chrono::steady_clock::now();
 
             while (!this->all_post_buffers_full())
@@ -558,11 +577,8 @@ namespace flightLogger
             recorder_options["format_version"]  = "1";
             recorder_options["pre_capacity"]    = std::to_string(this->options_.pre_capacity);
             recorder_options["post_capacity"]   = std::to_string(this->options_.post_capacity);
-            recorder_options["post_trigger_timeout_ns"] = std::to_string(this->options_.post_trigger_timeout_ns);
+            recorder_options["post_trigger_timeout_ms"] = std::to_string(this->options_.post_trigger_timeout_ms);
             recorder_options["output_path"]      = this->options_.output_path;
-            recorder_options["output_file_name"] = this->options_.output_file_name;
-            recorder_options["profile"]          = this->options_.profile;
-            recorder_options["library"]          = this->options_.library;
             recorder_options["channel_count"]    = std::to_string(this->channels_.size());
             for (const auto& channel : this->channels_)
             {
@@ -581,8 +597,11 @@ namespace flightLogger
 
         std::filesystem::path make_output_path() const
         {
-            std::filesystem::path output_dir{this->options_.output_path};
+            const std::filesystem::path output_prefix{this->options_.output_path};
+            auto                        output_dir = output_prefix.parent_path();
+            if (output_dir.empty()) output_dir = ".";
             std::filesystem::create_directories(output_dir);
+            const auto output_file_prefix = output_prefix.filename().string();
 
             // 生成形如 "前缀-年月日_时分秒" 的时间戳(本地时间,秒精度)。
             using namespace std::chrono;
@@ -596,7 +615,7 @@ namespace flightLogger
             std::ostringstream oss;
             oss << std::put_time(&tm_buf, "%Y%m%d_%H%M%S");
 
-            return output_dir / (this->options_.output_file_name + "-" + oss.str() + ".mcap");
+            return output_dir / (output_file_prefix + "-" + oss.str() + ".mcap");
         }
 
         void set_state(RecorderState state) noexcept

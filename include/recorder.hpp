@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -31,12 +32,11 @@ namespace flightLogger
     {
         std::size_t                                  pre_capacity{4096};
         std::size_t                                  post_capacity{4096};
-        uint64_t                                     post_trigger_timeout_ns{1'000'000'000ULL};
-        std::string                                  output_path{"."};
-        std::string                                  output_file_name{"flight_logger"};
-        std::string                                  profile{"flight_logger"};
-        std::string                                  library{"flight_logger"};
+        uint64_t                                     post_trigger_timeout_ms{1000};
+        std::string                                  output_path{"flight_logger"};
         std::unordered_map<std::string, std::string> mcap_metadata;
+
+        void validate() const;
     };
 
     namespace detail
