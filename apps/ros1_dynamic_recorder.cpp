@@ -12,9 +12,10 @@
 
 #include <ros/ros.h>
 
-#include "bridge/ros1.hpp"
-#include "cli.hpp"
+#include "CLI11.hpp"
+#include "bridge/ros1/ros1.hpp"
 #include "recorder.hpp"
+#include "ros1/cli.hpp"
 
 namespace
 {
@@ -37,6 +38,8 @@ namespace
 
 int main(int argc, char** argv)
 {
+    CLI::App app{"ROS1 dynamic MCAP recorder"};
+
     try
     {
         ros::init(argc, argv, "ros1_dynamic_recorder", ros::init_options::NoSigintHandler);
@@ -44,34 +47,28 @@ int main(int argc, char** argv)
         std::vector<std::string> clean_args;
         ros::removeROSArgs(argc, argv, clean_args);
         std::vector<char*> clean_argv;
-        clean_argv.reserve(clean_args.size());
+        clean_argv.reserve(clean_args.size()); 
         for (auto& arg : clean_args) clean_argv.push_back(arg.data());
 
-        auto cli_options = flightLogger::parse_dynamic_recorder_cli(static_cast<int>(clean_argv.size()), clean_argv.data());
+        auto cli_options = flightLogger::parse_ros1_dynamic_recorder_cli(app, static_cast<int>(clean_argv.size()), clean_argv.data());
 
-        if (cli_options.help)
-        {
-            std::cerr << flightLogger::dynamic_recorder_usage(argv[0]);
-            return 0;
-        }
-
-        std::vector<std::string> ros1_topics;
-        ros1_topics.reserve(cli_options.sources.size());
-        for (const auto& spec : cli_options.sources) ros1_topics.push_back(spec.target);
-
-        constexpr std::size_t kRingSize = 4096;
-
-        std::filesystem::create_directories(cli_options.recorder_options.output_path);
+        auto output_dir = std::filesystem::path{cli_options.recorder_options.output_path}.parent_path();
+        if (output_dir.empty()) output_dir = ".";
+        std::filesystem::create_directories(output_dir);
 
         ros::NodeHandle node;
         flightLogger::FlightRecorder recorder{cli_options.recorder_options};
-        flightLogger::Ros1TopicBridge<kRingSize> bridge{node, recorder, std::move(ros1_topics)};
+        flightLogger::Ros1TopicBridge bridge{
+            node,
+            recorder,
+            std::move(cli_options.topics),
+            flightLogger::Ros1TopicBridgeOptions{cli_options.ros1_options.queue_size}};
         bridge.start();
 
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
 
-        ros::AsyncSpinner spinner{1};
+        ros::AsyncSpinner spinner{cli_options.ros1_options.spinner_threads};
         spinner.start();
 
         std::cerr << "[mcapper] recording ROS1 sources; press Ctrl+C to trigger MCAP dump\n";
@@ -90,11 +87,14 @@ int main(int argc, char** argv)
         spinner.stop();
 
         print_topics("[mcapper] recorded topics:", bridge.ready_topics());
-        std::cerr << "[mcapper] output directory: " << std::filesystem::absolute(cli_options.recorder_options.output_path) << '\n';
+        std::cerr << "[mcapper] output prefix: " << std::filesystem::absolute(cli_options.recorder_options.output_path) << '\n';
+    }
+    catch (const CLI::ParseError& error)
+    {
+        return app.exit(error);
     }
     catch (const std::exception& error)
     {
-        std::cerr << flightLogger::dynamic_recorder_usage(argv[0]);
         std::cerr << "ros1_dynamic_recorder failed: " << error.what() << '\n';
         return 1;
     }

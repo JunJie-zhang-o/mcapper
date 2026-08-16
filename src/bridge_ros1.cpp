@@ -1,4 +1,4 @@
-#include "bridge/ros1.hpp"
+#include "bridge/ros1/ros1.hpp"
 
 #if FLIGHTLOGGER_ENABLE_ROS1
 

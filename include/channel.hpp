@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -174,7 +173,7 @@ namespace flightLogger
             this->records_.clear();
             this->cursor_ = 0;
 
-            const auto append_records = [this](std::span<const Record> records)
+            const auto append_records = [this](ConstSegment<Record> records)
             {
                 for (const auto& record : records)
                 {

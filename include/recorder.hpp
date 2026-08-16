@@ -222,7 +222,7 @@ namespace flightLogger
                               MessageEncoding encoding,
                               std::unordered_map<std::string, std::string> metadata = {})
         {
-            using Value = std::remove_cvref_t<T>;
+            using Value = typename std::remove_cv<typename std::remove_reference<T>::type>::type;
 
             ChannelInfo info;
             auto        codec  = detail::make_codec<Value>(encoding);

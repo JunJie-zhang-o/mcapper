@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
-#include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -23,6 +23,62 @@ namespace flightLogger
     };
 
     template <typename T>
+    class ConstSegment
+    {
+    public:
+        using const_iterator = const T*;
+
+        constexpr ConstSegment() noexcept = default;
+
+        constexpr ConstSegment(const T* data, std::size_t size) noexcept : data_(data), size_(size)
+        {
+        }
+
+        [[nodiscard]] constexpr const T* data() const noexcept
+        {
+            return this->data_;
+        }
+
+        [[nodiscard]] constexpr std::size_t size() const noexcept
+        {
+            return this->size_;
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept
+        {
+            return this->size_ == 0;
+        }
+
+        [[nodiscard]] constexpr const_iterator begin() const noexcept
+        {
+            return this->data_;
+        }
+
+        [[nodiscard]] constexpr const_iterator end() const noexcept
+        {
+            return this->data_ == nullptr ? nullptr : this->data_ + this->size_;
+        }
+
+    private:
+        const T*    data_{nullptr};
+        std::size_t size_{0};
+    };
+
+    namespace detail
+    {
+        template <typename T, typename = void>
+        struct HasTimestampNs : std::false_type
+        {
+        };
+
+        template <typename T>
+        struct HasTimestampNs<T, std::void_t<decltype(static_cast<uint64_t>(std::declval<const T&>().timestamp_ns))>>
+            : std::true_type
+        {
+        };
+    }  // namespace detail
+
+    template <typename T>
     class OverwriteRingBuffer
     {
     public:
@@ -36,9 +92,9 @@ namespace flightLogger
         struct Segments
         {
             /// @brief First contiguous chronological segment.
-            std::span<const T> first;
+            ConstSegment<T> first;
             /// @brief Second wrapped chronological segment.
-            std::span<const T> second;
+            ConstSegment<T> second;
         };
 
         /// @brief Append a copy of a value, overwriting the oldest entry when full.
@@ -92,19 +148,19 @@ namespace flightLogger
             return this->size_ == this->data_.size();
         }
 
-        /// @brief Access stored elements in chronological order as up to two spans.
-        /// @return One or two contiguous spans covering all valid elements.
+        /// @brief Access stored elements in chronological order as up to two segments.
+        /// @return One or two contiguous segments covering all valid elements.
         [[nodiscard]] Segments chronological_segments() const noexcept
         {
             if (this->size_ == 0) return {};
 
             if (this->size_ < this->data_.size())
             {
-                return {std::span<const T>{this->data_.data(), this->size_}, {}};
+                return {ConstSegment<T>{this->data_.data(), this->size_}, {}};
             }
 
-            return {std::span<const T>{this->data_.data() + this->write_, this->data_.size() - this->write_},
-                    std::span<const T>{this->data_.data(), this->write_}};
+            return {ConstSegment<T>{this->data_.data() + this->write_, this->data_.size() - this->write_},
+                    ConstSegment<T>{this->data_.data(), this->write_}};
         }
 
     private:
@@ -243,7 +299,7 @@ namespace flightLogger
         {
             if (this->first_record_time_ns_.has_value()) return;
 
-            if constexpr (requires(const T& record) { static_cast<uint64_t>(record.timestamp_ns); })
+            if constexpr (detail::HasTimestampNs<T>::value)
             {
                 this->first_record_time_ns_ = static_cast<uint64_t>(value.timestamp_ns);
             }

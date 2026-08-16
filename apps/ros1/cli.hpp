@@ -2,25 +2,20 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "cli.hpp"
+#include "bridge/ros1/config.hpp"
 #include "recorder.hpp"
+
+namespace CLI
+{
+    class App;
+}
 
 namespace flightLogger
 {
-
-    struct Ros1TopicConfig
-    {
-        std::string topic;
-        std::size_t pre_capacity{4096};
-        std::size_t post_capacity{4096};
-
-        void validate() const;
-    };
 
     struct Ros1BridgeCliOptions
     {
@@ -33,7 +28,6 @@ namespace flightLogger
 
     struct Ros1DynamicRecorderCliOptions
     {
-        bool                         help{false};
         FlightRecorderOptions        recorder_options;
         Ros1BridgeCliOptions         ros1_options;
         std::vector<Ros1TopicConfig> topics;
@@ -42,10 +36,10 @@ namespace flightLogger
     Ros1TopicConfig parse_ros1_topic_config(std::string_view input,
                                             std::size_t default_pre_capacity,
                                             std::size_t default_post_capacity);
-    std::vector<Ros1TopicConfig> parse_ros1_topic_configs(std::span<const std::string> inputs,
-                                                          const RecorderCliOptions& recorder_options);
+    std::vector<Ros1TopicConfig> parse_ros1_topic_configs(const std::vector<std::string>& inputs,
+                                                          const FlightRecorderOptions& recorder_options);
 
+    Ros1DynamicRecorderCliOptions parse_ros1_dynamic_recorder_cli(CLI::App& app, int argc, char* argv[]);
     Ros1DynamicRecorderCliOptions parse_ros1_dynamic_recorder_cli(int argc, char* argv[]);
-    std::string ros1_dynamic_recorder_usage(std::string_view program);
 
 }  // namespace flightLogger

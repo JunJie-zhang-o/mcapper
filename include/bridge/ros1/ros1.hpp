@@ -21,9 +21,9 @@
 #include <topic_tools/shape_shifter.h>
 
 #include "channel.hpp"
+#include "bridge/ros1/config.hpp"
 #include "codec/ros1.hpp"
 #include "recorder.hpp"
-#include "bridge/ros1_cli.hpp"
 
 namespace flightLogger
 {

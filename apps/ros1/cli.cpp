@@ -1,4 +1,4 @@
-#include "bridge/ros1_cli.hpp"
+#include "ros1/cli.hpp"
 
 #include "CLI11.hpp"
 
@@ -43,26 +43,6 @@ namespace flightLogger
             return sources;
         }
     }  // namespace
-
-    void Ros1TopicConfig::validate() const
-    {
-        if (topic.empty())
-        {
-            throw std::invalid_argument("source target is empty");
-        }
-        if (topic.find(':') != std::string::npos)
-        {
-            throw std::invalid_argument("source topic must not contain ':'");
-        }
-        if (pre_capacity == 0)
-        {
-            throw std::invalid_argument("invalid positive integer value for --source pre capacity");
-        }
-        if (post_capacity == 0)
-        {
-            throw std::invalid_argument("invalid positive integer value for --source post capacity");
-        }
-    }
 
     void Ros1BridgeCliOptions::validate() const
     {
@@ -126,8 +106,8 @@ namespace flightLogger
         return config;
     }
 
-    std::vector<Ros1TopicConfig> parse_ros1_topic_configs(std::span<const std::string> inputs,
-                                                          const RecorderCliOptions& recorder_options)
+    std::vector<Ros1TopicConfig> parse_ros1_topic_configs(const std::vector<std::string>& inputs,
+                                                          const FlightRecorderOptions& recorder_options)
     {
         recorder_options.validate();
 
@@ -145,66 +125,52 @@ namespace flightLogger
         return topics;
     }
 
-    Ros1DynamicRecorderCliOptions parse_ros1_dynamic_recorder_cli(int argc, char* argv[])
+    Ros1DynamicRecorderCliOptions parse_ros1_dynamic_recorder_cli(CLI::App& app, int argc, char* argv[])
     {
-        RecorderCliOptions   recorder;
-        Ros1BridgeCliOptions ros1;
-        std::string          source_arg;
+        FlightRecorderOptions recorder;
+        Ros1BridgeCliOptions  ros1;
+        std::string           source_arg;
 
-        CLI::App app{"ROS1 dynamic MCAP recorder"};
+        recorder.output_path = "./logs/ros1_dynamic";
+
         app.set_help_flag("--help", "Print this help message and exit");
-        app.add_option("--recorder.output", recorder.output, "Output path and file prefix");
+        app.add_option("--recorder.output", recorder.output_path, "Output path and file prefix");
         app.add_option("--recorder.pre-capacity", recorder.pre_capacity, "Default pre-trigger record capacity per topic");
         app.add_option("--recorder.post-capacity", recorder.post_capacity, "Default post-trigger record capacity per topic");
-        app.add_option("--recorder.post-trigger-timeout-sec", recorder.post_trigger_timeout_sec, "Post-trigger wait timeout");
+        app.add_option("--recorder.post-trigger-timeout-ms", recorder.post_trigger_timeout_ms, "Post-trigger wait timeout in milliseconds");
         app.add_option("--ros1.spinner-threads", ros1.spinner_threads, "ROS1 async spinner threads");
         app.add_option("--ros1.queue-size", ros1.queue_size, "ROS1 subscriber queue size");
         app.add_option("--ros1.sources", source_arg, "ROS1 topics")
             ->required();
 
+        app.parse(argc, argv);
+
+        Ros1DynamicRecorderCliOptions options;
+
+        ros1.sources = split_sources(source_arg);
+        recorder.mcap_metadata["source_kind"] = "ros1_dynamic";
+        recorder.validate();
+        ros1.validate();
+
+        options.recorder_options = std::move(recorder);
+        options.ros1_options     = ros1;
+        options.topics           = parse_ros1_topic_configs(ros1.sources, options.recorder_options);
+
+        return options;
+    }
+
+    Ros1DynamicRecorderCliOptions parse_ros1_dynamic_recorder_cli(int argc, char* argv[])
+    {
+        CLI::App app{"ROS1 dynamic MCAP recorder"};
+
         try
         {
-            app.parse(argc, argv);
-        }
-        catch (const CLI::CallForHelp&)
-        {
-            Ros1DynamicRecorderCliOptions options;
-            options.help = true;
-            return options;
+            return parse_ros1_dynamic_recorder_cli(app, argc, argv);
         }
         catch (const CLI::ParseError& error)
         {
             throw std::invalid_argument(error.what());
         }
-
-        Ros1DynamicRecorderCliOptions options;
-
-        ros1.sources = split_sources(source_arg);
-        recorder.validate();
-        ros1.validate();
-
-        options.recorder_options = make_flight_recorder_options(recorder, "ros1_dynamic");
-        options.ros1_options     = ros1;
-        options.topics           = parse_ros1_topic_configs(ros1.sources, recorder);
-
-        return options;
-    }
-
-    std::string ros1_dynamic_recorder_usage(std::string_view program)
-    {
-        std::string usage;
-        usage += "Usage: ";
-        usage += program;
-        usage += " [options]\n";
-        usage += "Options:\n";
-        usage += "  --recorder.output=PATH/PREFIX              Output path and file prefix, default ./logs/ros1_dynamic\n";
-        usage += "  --recorder.pre-capacity=N                  Default pre-trigger record capacity per topic, default 4096\n";
-        usage += "  --recorder.post-capacity=N                 Default post-trigger record capacity per topic, default 4096\n";
-        usage += "  --recorder.post-trigger-timeout-sec=SECONDS  Post-trigger wait timeout, default 1\n";
-        usage += "  --ros1.spinner-threads=N                   ROS1 async spinner threads, default 4\n";
-        usage += "  --ros1.queue-size=N                        ROS1 subscriber queue size, default 5\n";
-        usage += "  --ros1.sources=SOURCE[,SOURCE...]          ROS1 topics, e.g. ros1:/imu,ros1:/tf:2048:256\n";
-        return usage;
     }
 
 }  // namespace flightLogger
