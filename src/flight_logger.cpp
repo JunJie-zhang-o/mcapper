@@ -98,6 +98,14 @@ namespace flightLogger
             return oss.str();
         }
 
+        std::string format_epoch_ns_ms(uint64_t timestamp_ns)
+        {
+            using namespace std::chrono;
+
+            const auto duration = duration_cast<system_clock::duration>(nanoseconds{static_cast<nanoseconds::rep>(timestamp_ns)});
+            return format_wall_time_ms(system_clock::time_point{duration});
+        }
+
         void write_metadata_record(mcap::McapWriter& writer, std::string name, std::unordered_map<std::string, std::string> metadata_map)
         {
             mcap::Metadata metadata;
@@ -561,6 +569,12 @@ namespace flightLogger
                 const auto& topic = channel->info().topic;
                 recorder_options[topic + ".pre_capacity"]  = std::to_string(channel->pre_capacity());
                 recorder_options[topic + ".post_capacity"] = std::to_string(channel->post_capacity());
+
+                const auto first_record_time_ns = channel->first_record_time_ns();
+                recorder_options[topic + ".first_record_time_ns"] =
+                    first_record_time_ns ? std::to_string(*first_record_time_ns) : "-1";
+                recorder_options[topic + ".first_record_time"] =
+                    first_record_time_ns ? format_epoch_ns_ms(*first_record_time_ns) : "-1";
             }
             write_metadata_record(writer, "RECORDER_OPTIONS", std::move(recorder_options));
         }

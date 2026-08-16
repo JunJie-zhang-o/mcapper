@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -141,6 +142,7 @@ namespace flightLogger
             std::lock_guard<std::mutex> lock(this->mutex_);
             if (this->active_ == kPostIndex && this->buffers_[this->active_].full()) return;
 
+            this->remember_first_record_time_locked(value);
             this->buffers_[this->active_].push(value);
         }
 
@@ -151,6 +153,7 @@ namespace flightLogger
             std::lock_guard<std::mutex> lock(this->mutex_);
             if (this->active_ == kPostIndex && this->buffers_[this->active_].full()) return;
 
+            this->remember_first_record_time_locked(value);
             this->buffers_[this->active_].push(std::move(value));
         }
 
@@ -224,11 +227,27 @@ namespace flightLogger
             return this->buffers_[kPostIndex].full();
         }
 
+        [[nodiscard]] std::optional<uint64_t> first_record_time_ns() const noexcept
+        {
+            std::lock_guard<std::mutex> lock(this->mutex_);
+            return this->first_record_time_ns_;
+        }
+
     private:
         static constexpr std::size_t kPreAIndex = 0;
         static constexpr std::size_t kPostIndex = 1;
         static constexpr std::size_t kPreCIndex = 2;
         static constexpr int         kNoFrozen  = -1;
+
+        void remember_first_record_time_locked(const T& value)
+        {
+            if (this->first_record_time_ns_.has_value()) return;
+
+            if constexpr (requires(const T& record) { static_cast<uint64_t>(record.timestamp_ns); })
+            {
+                this->first_record_time_ns_ = static_cast<uint64_t>(value.timestamp_ns);
+            }
+        }
 
         bool try_acquire_frozen(int frozen_index, bool& dumping, std::size_t& index, const Ring*& ring) noexcept
         {
@@ -265,6 +284,7 @@ namespace flightLogger
         int                 frozen_post_index_{kNoFrozen};
         bool                pre_dumping_{false};
         bool                post_dumping_{false};
+        std::optional<uint64_t> first_record_time_ns_;
         mutable std::mutex  mutex_;
     };
 

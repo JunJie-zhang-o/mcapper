@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -37,6 +38,7 @@ namespace flightLogger
         virtual std::size_t        pre_capacity() const noexcept  = 0;
         virtual std::size_t        post_capacity() const noexcept = 0;
         virtual bool               post_full() const noexcept     = 0;
+        virtual std::optional<uint64_t> first_record_time_ns() const noexcept = 0;
 
         virtual void request_freeze_pre() noexcept                                      = 0;
         virtual void request_freeze_post() noexcept                                     = 0;
@@ -96,6 +98,11 @@ namespace flightLogger
         bool post_full() const noexcept override
         {
             return this->ring_.post_full();
+        }
+
+        std::optional<uint64_t> first_record_time_ns() const noexcept override
+        {
+            return this->ring_.first_record_time_ns();
         }
 
         void request_freeze_pre() noexcept override
