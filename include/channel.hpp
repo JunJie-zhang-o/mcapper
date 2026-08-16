@@ -64,11 +64,11 @@ namespace flightLogger
 
     public:
         using Record     = TimedRecord<T>;
-        using TripleRing = TripleRingBuffer<Record>;
-        using Ring       = typename TripleRing::Ring;
+        using RingBuffer = BlackBox<Record>;
+        using Ring       = typename RingBuffer::Ring;
         using Serializer = std::unique_ptr<ISerializer<T>>;
 
-        FlightChannel(ChannelInfo info, TripleRing& ring, Serializer serializer) : info_(std::move(info)), ring_(ring), serializer_(std::move(serializer))
+        FlightChannel(ChannelInfo info, RingBuffer& ring, Serializer serializer) : info_(std::move(info)), ring_(ring), serializer_(std::move(serializer))
         {
             if (!this->serializer_) throw std::invalid_argument("flight channel serializer is empty");
         }
@@ -198,7 +198,7 @@ namespace flightLogger
         }
 
         ChannelInfo                info_;
-        TripleRing&                ring_;
+        RingBuffer&                ring_;
         Serializer                 serializer_;
         std::size_t                frozen_index_{0};
         const Ring*                frozen_ring_{nullptr};

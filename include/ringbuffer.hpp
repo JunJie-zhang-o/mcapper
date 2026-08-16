@@ -124,12 +124,12 @@ namespace flightLogger
     };
 
     template <typename T>
-    class TripleRingBuffer
+    class BlackBox
     {
     public:
         using Ring = OverwriteRingBuffer<T>;
 
-        TripleRingBuffer(std::size_t pre_capacity, std::size_t post_capacity)
+        BlackBox(std::size_t pre_capacity, std::size_t post_capacity)
             : buffers_{Ring{pre_capacity}, Ring{post_capacity}, Ring{pre_capacity}}
         {
         }
