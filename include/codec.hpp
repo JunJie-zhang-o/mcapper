@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -8,7 +9,30 @@
 namespace flightLogger
 {
 
-    enum class MessageEncoding;
+    enum class MessageEncoding
+    {
+        Ros1,
+        Cdr,
+        Protobuf,
+        Flatbuffer,
+        CapnProto,
+        Cbor,
+        MsgPack,
+        Json,
+    };
+
+    enum class SchemaEncoding
+    {
+        None,
+        Protobuf,
+        Flatbuffer,
+        CapnProto,
+        Ros1Msg,
+        Ros2Msg,
+        Ros2Idl,
+        OmgIdl,
+        JsonSchema,
+    };
 
     struct SchemaInfo
     {
@@ -29,5 +53,11 @@ namespace flightLogger
 
         virtual std::string_view message_encoding() const noexcept = 0;
     };
+
+    namespace detail
+    {
+        template <typename T>
+        std::unique_ptr<ICodec<T>> make_codec(MessageEncoding encoding);
+    }  // namespace detail
 
 }  // namespace flightLogger

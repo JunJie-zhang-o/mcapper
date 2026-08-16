@@ -14,37 +14,6 @@
 namespace flightLogger
 {
 
-    enum class MessageEncoding
-    {
-        Ros1,
-        Cdr,
-        Protobuf,
-        Flatbuffer,
-        CapnProto,
-        Cbor,
-        MsgPack,
-        Json,
-    };
-
-    enum class SchemaEncoding
-    {
-        None,
-        Protobuf,
-        Flatbuffer,
-        CapnProto,
-        Ros1Msg,
-        Ros2Msg,
-        Ros2Idl,
-        OmgIdl,
-        JsonSchema,
-    };
-
-    namespace detail
-    {
-        template <typename T>
-        std::unique_ptr<ICodec<T>> make_codec(MessageEncoding encoding);
-    }  // namespace detail
-
     enum class RecorderState
     {
         Idle,
@@ -79,10 +48,11 @@ namespace flightLogger
         // =====================================================================
         // register_channel 系列重载
         // ---------------------------------------------------------------------
-        // 提供三种由低到高的注册方式,内部逐层转发,最终都汇聚到 (1) 号重载:
+        // 提供四种由低到高的注册方式,内部逐层转发,最终都汇聚到 (1) 号重载:
         //   (1) 传入自定义 ISerializer<T> 智能指针      —— 最灵活,最底层
         //   (2) 传入一个 std::function / lambda        —— 中间便捷层
-        //   (3) 只传 topic 与 MessageEncoding 枚举     —— 最简 API,自动建 codec
+        //   (3) 传入 ICodec<T> 智能指针               —— 自动填充 schema/channel 信息
+        //   (4) 只传 topic 与 MessageEncoding 枚举     —— 最简 API,自动建 codec
         // =====================================================================
 
         /**
@@ -156,7 +126,34 @@ namespace flightLogger
         }
 
         /**
-         * @brief (3) 高层重载:只需指定 topic 和 MessageEncoding,库自动完成其余配置。
+         * @brief (3) Codec 重载:传入已构造的 ICodec 派生对象,自动填充 ChannelInfo。
+         *
+         * 适合 ROS1 / ROS2 / struct 等需要调用方显式选择 codec 或提供 schema 的场景。
+         */
+        template <typename T, std::size_t N, typename Codec, typename = std::enable_if_t<std::is_base_of_v<ICodec<T>, Codec>>>
+        void register_channel(std::string topic,
+                              TripleRingBuffer<TimedRecord<T>, N>& ring,
+                              std::unique_ptr<Codec> codec,
+                              std::unordered_map<std::string, std::string> metadata = {})
+        {
+            if (!codec) throw std::invalid_argument("flight channel codec is empty");
+
+            ChannelInfo info;
+            auto        schema = codec->schema();
+
+            info.topic             = std::move(topic);
+            info.message_encoding  = codec->message_encoding();
+            info.schema_name       = std::move(schema.name);
+            info.schema_encoding   = std::move(schema.encoding);
+            info.schema_data       = std::move(schema.data);
+            info.metadata          = std::move(metadata);
+            info.metadata["topic"] = info.topic;
+
+            this->register_channel<T, N>(std::move(info), ring, std::move(codec));
+        }
+
+        /**
+         * @brief (4) 高层重载:只需指定 topic 和 MessageEncoding,库自动完成其余配置。
          *
          * 内部行为:
          *   1. 通过 `detail::make_codec<T>(encoding)` 创建对应编码的 codec
