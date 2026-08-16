@@ -1,32 +1,25 @@
 #pragma once
 
-#include <span>
+#include <cstddef>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "recorder.hpp"
 
 namespace flightLogger
 {
 
-    struct SourceSpec
+    struct RecorderCliOptions
     {
-        std::string scheme;
-        std::string target;
+        std::string output{"./logs/ros1_dynamic"};
+        std::size_t pre_capacity{4096};
+        std::size_t post_capacity{4096};
+        double      post_trigger_timeout_sec{1.0};
+
+        void validate() const;
     };
 
-    struct DynamicRecorderCliOptions
-    {
-        bool                          help{false};
-        FlightRecorderOptions         recorder_options;
-        std::vector<SourceSpec>       sources;
-    };
-
-    SourceSpec parse_source_spec(std::string_view input);
-    std::vector<SourceSpec> parse_source_specs(std::span<const std::string> inputs);
-
-    DynamicRecorderCliOptions parse_dynamic_recorder_cli(int argc, char* argv[]);
-    std::string dynamic_recorder_usage(std::string_view program);
+    FlightRecorderOptions make_flight_recorder_options(const RecorderCliOptions& cli_options,
+                                                       std::string_view source_kind);
 
 }  // namespace flightLogger

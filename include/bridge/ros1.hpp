@@ -6,13 +6,14 @@
 
 #if FLIGHTLOGGER_ENABLE_ROS1
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "channel.hpp"
 #include "codec/ros1.hpp"
 #include "recorder.hpp"
+#include "bridge/ros1_cli.hpp"
 
 namespace flightLogger
 {
@@ -41,17 +43,36 @@ namespace flightLogger
     uint64_t ros1_now_ns();
     SerializedPayload serialize_raw_ros1_message(const topic_tools::ShapeShifter& message);
 
+    struct Ros1TopicBridgeOptions
+    {
+        uint32_t queue_size{5};
+    };
+
     class Ros1TopicBridge
     {
-    public:
-        Ros1TopicBridge(ros::NodeHandle& node, FlightRecorder& recorder, std::vector<std::string> topics, std::size_t pre_capacity, std::size_t post_capacity)
-            : node_(node), recorder_(recorder), pre_capacity_(pre_capacity), post_capacity_(post_capacity)
+    private:
+        enum class RegistrationState
         {
+            Pending,
+            Registering,
+            Registered,
+            Failed,
+        };
+
+    public:
+        Ros1TopicBridge(ros::NodeHandle& node,
+                        FlightRecorder& recorder,
+                        std::vector<Ros1TopicConfig> topics,
+                        Ros1TopicBridgeOptions options = {})
+            : node_(node), recorder_(recorder), options_(options)
+        {
+            if (this->options_.queue_size == 0) throw std::invalid_argument("ros1 queue size must be greater than zero");
+
             this->topics_.reserve(topics.size());
-            for (auto& topic : topics)
+            for (auto& topic_config : topics)
             {
-                if (topic.empty()) throw std::invalid_argument("ros1 topic is empty");
-                this->topics_.push_back(std::make_unique<TopicState>(std::move(topic), this->pre_capacity_, this->post_capacity_));
+                if (topic_config.topic.empty()) throw std::invalid_argument("ros1 topic is empty");
+                this->topics_.push_back(std::make_unique<TopicState>(std::move(topic_config)));
             }
         }
 
@@ -62,7 +83,7 @@ namespace flightLogger
                 TopicState* state = topic.get();
                 state->subscriber = this->node_.subscribe<topic_tools::ShapeShifter>(
                     state->topic,
-                    100,
+                    this->options_.queue_size,
                     [this, state](const topic_tools::ShapeShifter::ConstPtr& message)
                     {
                         this->handle_message(*state, message);
@@ -72,12 +93,12 @@ namespace flightLogger
 
         std::vector<std::string> ready_topics() const
         {
-            std::lock_guard<std::mutex> lock(this->mutex_);
-            std::vector<std::string>    result;
+            std::vector<std::string> result;
 
             for (const auto& topic : this->topics_)
             {
-                if (topic->registered) result.push_back(topic->topic);
+                if (topic->registration_state.load(std::memory_order_acquire) == RegistrationState::Registered)
+                    result.push_back(topic->topic);
             }
 
             return result;
@@ -85,12 +106,12 @@ namespace flightLogger
 
         std::vector<std::string> pending_topics() const
         {
-            std::lock_guard<std::mutex> lock(this->mutex_);
-            std::vector<std::string>    result;
+            std::vector<std::string> result;
 
             for (const auto& topic : this->topics_)
             {
-                if (!topic->registered) result.push_back(topic->topic);
+                if (topic->registration_state.load(std::memory_order_acquire) != RegistrationState::Registered)
+                    result.push_back(topic->topic);
             }
 
             return result;
@@ -99,17 +120,49 @@ namespace flightLogger
     private:
         struct TopicState
         {
-            TopicState(std::string topic_name, std::size_t pre_capacity, std::size_t post_capacity)
-                : topic(std::move(topic_name)), ring(pre_capacity, post_capacity)
+            explicit TopicState(Ros1TopicConfig config)
+                : topic(std::move(config.topic)),
+                  pre_capacity(config.pre_capacity),
+                  post_capacity(config.post_capacity),
+                  ring(pre_capacity, post_capacity)
             {
             }
 
             std::string topic;
-            TripleRingBuffer<TimedRecord<RawRos1Message>> ring;
+            std::size_t pre_capacity;
+            std::size_t post_capacity;
+            BlackBox<TimedRecord<RawRos1Message>> ring;
             ros::Subscriber subscriber;
-            bool registered{false};
-            bool registration_failed{false};
+            std::atomic<RegistrationState> registration_state{RegistrationState::Pending};
         };
+
+        bool register_topic(TopicState& state, const topic_tools::ShapeShifter& message)
+        {
+            ChannelInfo info;
+            info.topic             = state.topic;
+            info.message_encoding  = "ros1";
+            info.schema_name       = message.getDataType();
+            info.schema_encoding   = "ros1msg";
+            info.schema_data       = detail::ros1_schema_data(message.getMessageDefinition());
+            info.metadata["topic"] = state.topic;
+            info.metadata["md5sum"] = message.getMD5Sum();
+            info.metadata["pre_capacity"]  = std::to_string(state.pre_capacity);
+            info.metadata["post_capacity"] = std::to_string(state.post_capacity);
+
+            try
+            {
+                this->recorder_.register_channel<RawRos1Message>(
+                    std::move(info),
+                    state.ring,
+                    std::make_unique<RawRos1MessageSerializer>());
+                return true;
+            }
+            catch (const std::exception& error)
+            {
+                ROS_ERROR_STREAM("failed to register ROS1 topic " << state.topic << ": " << error.what());
+                return false;
+            }
+        }
 
         void handle_message(TopicState& state, const topic_tools::ShapeShifter::ConstPtr& message)
         {
@@ -118,48 +171,42 @@ namespace flightLogger
             const auto timestamp_ns = ros1_now_ns();
             RawRos1Message raw{serialize_raw_ros1_message(*message)};
 
-            std::lock_guard<std::mutex> lock(this->mutex_);
-
-            if (!state.registered && !state.registration_failed)
+            auto registration_state = state.registration_state.load(std::memory_order_acquire);
+            if (registration_state == RegistrationState::Pending)
             {
-                ChannelInfo info;
-                info.topic             = state.topic;
-                info.message_encoding  = "ros1";
-                info.schema_name       = message->getDataType();
-                info.schema_encoding   = "ros1msg";
-                info.schema_data       = detail::ros1_schema_data(message->getMessageDefinition());
-                info.metadata["topic"] = state.topic;
-                info.metadata["md5sum"] = message->getMD5Sum();
-                info.metadata["pre_capacity"]  = std::to_string(this->pre_capacity_);
-                info.metadata["post_capacity"] = std::to_string(this->post_capacity_);
-
-                try
+                auto expected = RegistrationState::Pending;
+                if (state.registration_state.compare_exchange_strong(
+                        expected,
+                        RegistrationState::Registering,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire))
                 {
-                    this->recorder_.register_channel<RawRos1Message>(
-                        std::move(info),
-                        state.ring,
-                        std::make_unique<RawRos1MessageSerializer>());
-                    state.registered = true;
+                    const auto next_state =
+                        this->register_topic(state, *message) ? RegistrationState::Registered : RegistrationState::Failed;
+                    state.registration_state.store(next_state, std::memory_order_release);
+                    registration_state = next_state;
                 }
-                catch (const std::exception& error)
+                else
                 {
-                    state.registration_failed = true;
-                    ROS_ERROR_STREAM("failed to register ROS1 topic " << state.topic << ": " << error.what());
-                    return;
+                    registration_state = expected;
                 }
             }
 
-            if (!state.registered) return;
+            while (registration_state == RegistrationState::Registering)
+            {
+                std::this_thread::yield();
+                registration_state = state.registration_state.load(std::memory_order_acquire);
+            }
+
+            if (registration_state != RegistrationState::Registered) return;
 
             state.ring.push(TimedRecord<RawRos1Message>{timestamp_ns, std::move(raw)});
         }
 
         ros::NodeHandle&                         node_;
         FlightRecorder&                          recorder_;
-        std::size_t                              pre_capacity_;
-        std::size_t                              post_capacity_;
+        Ros1TopicBridgeOptions                   options_;
         std::vector<std::unique_ptr<TopicState>> topics_;
-        mutable std::mutex                       mutex_;
     };
 
 }  // namespace flightLogger
