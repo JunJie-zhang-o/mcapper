@@ -4,6 +4,8 @@ set(CMAKE_C_COMPILER "/usr/bin/gcc-12")
 set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
 project(mcapper LANGUAGES C CXX)
 
+include(CMakePackageConfigHelpers)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -27,6 +29,16 @@ add_compile_options(
 
 find_package(Threads REQUIRED)
 
+set(CMAKE_INSTALL_INCLUDEDIR "include")
+set(CMAKE_INSTALL_LIBDIR "lib/${PROJECT_NAME}")
+set(CMAKE_INSTALL_DATAROOTDIR "share")
+set(MCAPPER_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}")
+set(MCAPPER_INSTALL_LIB_DIR "${CMAKE_INSTALL_LIBDIR}")
+set(MCAPPER_INSTALL_CMAKE_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake")
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/package.xml" PACKAGE_XML)
+string(REGEX MATCH "<version>[^<]+</version>" PACKAGE_VERSION_TAG "${PACKAGE_XML}")
+string(REGEX REPLACE "<version>([^<]+)</version>" "\\1" PACKAGE_VERSION "${PACKAGE_VERSION_TAG}")
 
 set(REFLECT_CPP_CORE_SOURCE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/src/reflectcpp.cpp)
@@ -42,13 +54,14 @@ add_library(flight_logger STATIC
 set_target_properties(flight_logger PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 
-target_compile_features(flight_logger PRIVATE cxx_std_20)
+target_compile_features(flight_logger PUBLIC cxx_std_20)
 
 target_include_directories(flight_logger
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty>
+    $<INSTALL_INTERFACE:${MCAPPER_INSTALL_INCLUDE_DIR}>
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mcap/include)
@@ -74,8 +87,9 @@ target_compile_features(flight_logger_rfl_deps PUBLIC cxx_std_20)
 
 target_include_directories(flight_logger_rfl_deps
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty)
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/reflect-cpp/include/rfl/thirdparty>
+    $<INSTALL_INTERFACE:${MCAPPER_INSTALL_INCLUDE_DIR}>)
 
 # reflect-cpp 0.25.0's core source uses std::numeric_limits without including
 # <limits>. Keep the vendored source untouched.
@@ -235,29 +249,51 @@ if(FLIGHTLOGGER_BUILD_TESTS)
         COMMAND flight_logger_attachment_test)
 endif()
 
-install(TARGETS flight_logger flight_logger_rfl_deps
-    ARCHIVE DESTINATION lib)
-
-if(TARGET flight_logger_smoke)
-    install(TARGETS flight_logger_smoke
-        RUNTIME DESTINATION bin)
-endif()
+install(TARGETS flight_logger flight_logger_rfl_deps flight_logger_rfl
+    EXPORT mcapper_targets
+    ARCHIVE DESTINATION ${MCAPPER_INSTALL_LIB_DIR}
+    LIBRARY DESTINATION ${MCAPPER_INSTALL_LIB_DIR}
+    RUNTIME DESTINATION bin)
 
 if(TARGET ros1_dynamic_recorder)
     install(TARGETS ros1_dynamic_recorder
         RUNTIME DESTINATION bin)
 endif()
 
+install(PROGRAMS mcap
+    DESTINATION bin)
+
 install(DIRECTORY include/
-    DESTINATION include)
+    DESTINATION ${MCAPPER_INSTALL_INCLUDE_DIR})
 install(DIRECTORY third_party/mcap/include/
-    DESTINATION include)
+    DESTINATION ${MCAPPER_INSTALL_INCLUDE_DIR})
 install(DIRECTORY third_party/reflect-cpp/include/
-    DESTINATION include)
+    DESTINATION ${MCAPPER_INSTALL_INCLUDE_DIR})
+
+install(
+    EXPORT mcapper_targets
+    FILE mcapper_targets.cmake
+    NAMESPACE mcapper::
+    DESTINATION ${MCAPPER_INSTALL_CMAKE_DIR})
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/mcapper-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/mcapper-config.cmake"
+    INSTALL_DESTINATION ${MCAPPER_INSTALL_CMAKE_DIR})
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/mcapper-config-version.cmake"
+    VERSION ${PACKAGE_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/mcapper-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/mcapper-config-version.cmake"
+    DESTINATION ${MCAPPER_INSTALL_CMAKE_DIR})
 
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_PACKAGE_NAME "mcapper")
-set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_PACKAGE_VERSION "${PACKAGE_VERSION}")
 include(CPack)
 
 if(FLIGHTLOGGER_ENABLE_ROS2)
